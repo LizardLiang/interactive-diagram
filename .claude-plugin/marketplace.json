@@ -1,0 +1,15 @@
+{
+  "name": "lizard-skills",
+  "owner": {
+    "name": "LizardLiang",
+    "url": "https://github.com/LizardLiang"
+  },
+  "plugins": [
+    {
+      "name": "interactive-diagram",
+      "source": "./",
+      "description": "Build beautiful, interactive technical diagrams as a single self-contained HTML file (pure HTML/CSS/vanilla JS).",
+      "version": "1.0.0"
+    }
+  ]
+}
