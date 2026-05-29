@@ -21,50 +21,84 @@ Do **not** hand-write the renderer from a blank file. Start from
 baseline (theme + dark mode, toolbar, SVG defs, pan/zoom/drag, hover, side
 panel, SVG/PNG export) whose headline feature is a baked-in **layout guard**.
 
+The skeleton is a small **framework**: the AI writes a three-level structure —
+**tab → container → block** — and the runtime turns it into HTML/SVG. You never
+hand-write elements.
+
+| Framework term | What it is | Renders as |
+|----------------|------------|------------|
+| **Tab** | a whole diagram / view | a DOM tab in the floating bar; each owns its own `<svg>` + layout-guard instance |
+| **Container** | a rectangle grouping blocks (band / lane / box) | dashed SVG group rectangle with a title pill |
+| **Block** | a node — one rounded rect (or diamond) inside a container | filled SVG rect, clickable, draggable |
+
 Workflow with the skeleton:
 
 1. Copy `assets/skeleton.html` to the output path.
-2. Replace **only the `CONFIG` block** (`diagram`) with the real system. Give
-   every node a `sector` id and define the `sectors` array; `x/y/w/h` are
-   starting hints, not final coordinates.
-3. Open it. `init()` runs the guard automatically and logs the audit result to
-   the console. Click **⚑ Audit overlap** to re-check at any time.
+2. Replace **only the `CONFIG` block** (`app`) with the real system. Each entry
+   in `app.tabs` is one independent diagram. Inside a tab, give every block a
+   `container` id and define the `containers` array; `x/y/w/h` are starting
+   hints, not final coordinates.
+3. Open it. `init()` builds the first tab, runs the guard automatically, and
+   logs the audit result per tab to the console. Click **⚑ Audit overlap**
+   (`⚑ 檢查重疊`) to re-check the active tab at any time; if it finds overlaps it
+   offers to **auto-fix** — `autoFix()` restores the tidy built layout (snapshotted
+   in `buildTab` as `tab.home`) and redraws, clearing drag-induced overlaps without
+   drifting the tuned container/title placement.
 
-### The layout guard (`Layout`)
+> **Note on chrome language.** The built-in UI (toolbar, legend, side-panel
+> headings, help modal, audit/auto-fix dialogs) ships in **Traditional Chinese
+> (zh-TW)**. Diagram *content* — tab/container labels, block labels, descriptions
+> — is whatever you author in the `app` config. To switch the chrome to another
+> language, edit the button text in the toolbar markup, `TYPE_LABELS`, the help
+> modal, and the `applyTheme`/audit strings.
 
-The skeleton checks distance / non-overlap across the **four element
-categories** a diagram is built from, and resolves collisions:
+### Tabs: one diagram or several
+
+- **One system / one view → one tab.** A single-tab `app` renders with the tab
+  strip hidden — it looks and behaves exactly like a plain single diagram.
+- **Multiple related views → multiple tabs** (e.g. "System", "Sequence",
+  "Deployment"). The tab strip appears in the floating bar automatically when
+  `app.tabs.length > 1`. Each tab is built lazily on first activation and
+  cached; each keeps its own pan/zoom, layout guard, and audit. Theme (light /
+  dark) is shared across all tabs.
+
+### The layout guard (`makeLayout(tab)`)
+
+Each tab gets its own guard instance via `makeLayout(tab)`. It checks distance /
+non-overlap across the **four element categories** a diagram is built from, and
+resolves collisions:
 
 | Category | What it is | Resolver |
 |----------|------------|----------|
-| `node`   | block rectangles / diamonds | `resolveNodes()` — push-apart loop, ≥40px clearance, axis of least resistance |
-| `label`  | text riding on arrow (edge) lines | `resolveLabels()` — vertical nudge so label boxes never collide |
-| `title`  | section / band / swimlane captions | `titleBox()` places each in clear margin outside its sector |
-| `sector` | container rectangles grouping nodes | `fitSectors()` grows each to contain its members + padding |
+| `block`     | block rectangles / diamonds | `resolveBlocks()` — push-apart loop, ≥40px clearance, axis of least resistance |
+| `label`     | text riding on arrow (edge) lines | `resolveLabels()` — vertical nudge so label boxes never collide |
+| `title`     | container captions | `titleBox()` places each in clear margin outside its container |
+| `container` | rectangles grouping blocks | `fitContainers()` grows each to contain its members + padding |
 
-Two entry points:
+Two entry points (on each tab's `layout`):
 
-- **`Layout.run()`** — call on the *data* before rendering: pushes nodes apart,
-  then grows sectors around them. (The skeleton's `init()` already does this.)
-- **`Layout.audit()`** — walks every conflicting category pair and returns
-  `{ ok, count, conflicts[] }`, logging a `console.table`. **Containment is not
-  a conflict**: a node inside its sector, a title captioning its sector, and
-  bands crossing swimlanes are all by design (see `Layout.POLICY.isConflict`).
-  Nodes that spill *outside* their declared sector are reported separately.
+- **`layout.run()`** — call on the *data* before rendering: pushes blocks apart,
+  then grows containers around them. (`buildTab()` already does this.)
+- **`layout.audit()`** — walks every conflicting category pair and returns
+  `{ ok, count, conflicts[] }`, logging a `console.table` tagged with the tab id.
+  **Containment is not a conflict**: a block inside its container, a title
+  captioning its container, and bands crossing lanes are all by design (see
+  `POLICY.isConflict`). Blocks that spill *outside* their declared container are
+  reported separately.
 
-`Layout.resolveLabels()` runs on the DOM after render (labels need measured
-positions); everything else runs on the in-memory `diagram` data. Geometry
-primitives (`measureText`, `penetration`, `overlaps`, `contains`) are exposed
-for custom layouts. **Before handing over the file, confirm the console shows
-`✓ Layout audit: no overlaps`** — if it logs conflicts, adjust the starting
-hints or sector membership and reload.
+`layout.resolveLabels()` runs on the DOM after render (labels need measured
+positions); everything else runs on the in-memory tab data. Geometry primitives
+(`measureText`, `penetration`, `overlaps`, `contains`) are exposed for custom
+layouts. **Before handing over the file, confirm the console shows
+`✓ Layout audit [<tab id>]: no overlaps` for every tab** — if it logs conflicts,
+adjust the starting hints or container membership and reload.
 
 ## Required structure of the generated file
 
 Organize the `<script>` into clearly commented sections, in this order:
 
 ```
-// === CONFIG ===     diagram data (nodes, edges) lives here, nothing else
+// === CONFIG ===     app data (tabs → containers, blocks, edges) lives here, nothing else
 // === RENDER ===     SVG construction, layout, edge routing
 // === INTERACTIONS === hover, click, drag, pan, zoom, panel
 // === EXPORT ===     SVG and PNG download
@@ -74,18 +108,38 @@ Organize the `<script>` into clearly commented sections, in this order:
 The `CONFIG` block must be the first thing in the script and must be self-contained, so the user can edit only that object to change the diagram. Use this shape:
 
 ```js
-const diagram = {
-  type: "system" | "sequence" | "flow",
-  nodes: [
-    { id, label, type, x, y, description, tech, responsibilities },
-    // type drives the color (service / database / queue / external / actor)
-  ],
-  edges: [
-    { from, to, label, style },
-    // style: "sync" | "async" | "dashed"
+const app = {
+  title: "Diagram",
+  tabs: [
+    {
+      id: "system",                       // unique; used as cache key + svg/png filename
+      label: "System",                    // caption shown in the tab strip
+      type: "system" | "sequence" | "flow",
+
+      containers: [                        // the grouping rectangles
+        { id, label, orient, color, title },
+        // orient: "band" (horizontal stripe) | "lane" (vertical column) | "box" (free)
+        // title.side: "above" | "left" | "top"
+      ],
+
+      blocks: [                            // the nodes
+        { id, container, label, type, x, y, w, h, description, tech, responsibilities },
+        // container = id of the container this block belongs to
+        // type drives the color (client / http / worker / infra / queue / db / external)
+      ],
+
+      edges: [
+        { from, to, label, style, bendDir },
+        // style: "sync" | "async" | "dashed"; bendDir: 1 | -1 to bow parallel edges apart
+      ],
+    },
+    // …add more tabs for additional views; the tab strip appears automatically
   ],
 };
 ```
+
+For a single diagram, use exactly one entry in `tabs` — the tab strip stays
+hidden and the file behaves like a plain single diagram.
 
 ## Required features
 
@@ -93,12 +147,14 @@ Render with **inline SVG**. SVG is interactive, scalable, and exportable — do 
 
 Interactions, all of which must work:
 
-1. **Hover** a node or edge → highlight it and its directly connected elements; dim everything else via opacity transition.
-2. **Click** a node → a side panel slides in from the right showing the node's label, type, description, tech, and responsibilities. Close via an X button or by clicking the backdrop.
-3. **Pan** by click-and-drag on empty canvas.
-4. **Zoom** with mouse wheel and trackpad pinch. Include `+`, `−`, and "Fit to screen" buttons in a floating toolbar.
-5. **Drag nodes** to reposition; edges must follow smoothly during the drag.
-6. **Sequence-diagram step mode** (only when `type: "sequence"`): Prev / Next buttons that reveal messages one at a time along vertical lifelines.
+1. **Hover** a node → highlight its **entire connected chain** (the full upstream flow that reaches it plus the full downstream flow it reaches, following edge direction), not just immediate neighbors; dim everything else via opacity transition. The skeleton's `chain()` computes this; `highlight()` applies it.
+2. **Double-click** a node → **pin** the chain highlight so it persists. Double-click again to unpin; clicking a different node also clears the pin. While pinned, hovering other nodes previews their chain and `mouseleave` restores the pinned one (per-tab `state.pinned`).
+3. **Click** a node → a side panel slides in from the right showing the node's label, type, description, tech, and responsibilities. Close via an X button or by clicking the backdrop.
+4. **Pan** by click-and-drag on empty canvas.
+5. **Zoom** with mouse wheel and trackpad pinch. Include `+`, `−`, and "Fit to screen" buttons in a floating toolbar.
+6. **Drag nodes** to reposition; edges must follow smoothly during the drag.
+7. **Help** button (`? Help`) in the toolbar → opens a modal documenting every interaction. Close via the X, the backdrop, or `Esc`.
+8. **Sequence-diagram step mode** (only when `type: "sequence"`): Prev / Next buttons that reveal messages one at a time along vertical lifelines.
    Visuals:
 
 - Modern aesthetic — clean like Linear, Vercel, or Stripe docs. No clip-art, no skeuomorphism.
@@ -116,7 +172,7 @@ Interactions, all of which must work:
 
 ## Layout quality rules
 
-These constraints must be satisfied before the file is handed to the user. The goal is that someone who opens the file immediately sees a clean, readable diagram — not a puzzle of overlapping boxes. When you start from `assets/skeleton.html`, the **layout guard enforces most of these automatically** (`Layout.run()` + `Layout.audit()`); the rules below explain what it does and what you still set by hand (sector membership, starting hints, edge routing).
+These constraints must be satisfied before the file is handed to the user. The goal is that someone who opens the file immediately sees a clean, readable diagram — not a puzzle of overlapping boxes. When you start from `assets/skeleton.html`, the **layout guard enforces most of these automatically** (each tab's `layout.run()` + `layout.audit()`); the rules below explain what it does and what you still set by hand (container membership, starting hints, edge routing).
 
 ### No overlap
 Every node's bounding box must have at least **40 px of clearance** on all sides from every other node's bounding box. After computing initial `x, y` positions in the config, run a simple **collision-push loop** in the RENDER section: iterate over all node pairs, compute overlap, and push them apart along the axis of least resistance. Repeat until no pair overlaps (cap at ~30 iterations to avoid infinite loops). This means the x/y values in the config are *starting hints*, not final positions.
@@ -178,4 +234,4 @@ If any checkbox would fail, fix it before handing over.
 
 ## Deliverable
 
-One `.html` file. Open it. It works. The user can edit the `diagram` config object at the top and reload to change the entire picture.
+One `.html` file. Open it. It works. The user can edit the `app` config object at the top and reload to change the entire picture.

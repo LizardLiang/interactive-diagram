@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Interactive Diagram — Skeleton</title>
+    <title>SaaS Platform — Interactive Diagram</title>
     <!--
       ============================================================================
       INTERACTIVE-DIAGRAM SKELETON  (tab / container / block framework)
@@ -281,82 +281,112 @@
       //                  finalizes them so nothing in the four categories overlaps.
       //   edges[]      — connections between blocks.
       const app = {
-        title: "圖表",
+        title: "SaaS Platform",
         tabs: [
           {
-            id: "system",
-            label: "System",
+            id: "architecture",
+            label: "架構",
             type: "system",
-
             containers: [
-              { id: "client",  label: "Client tier",  orient: "band", color: "#3b82f6", title: { side: "above" } },
-              { id: "backend", label: "Backend tier", orient: "band", color: "#15803d", title: { side: "above" } },
-              { id: "data",    label: "Data tier",    orient: "band", color: "#1f2937", title: { side: "above" } },
+              { id: "client",   label: "Client",            orient: "band", color: "#7aa2f7", title: { side: "top" } },
+              { id: "edge",     label: "Edge",              orient: "band", color: "#2ac3de", title: { side: "top" } },
+              { id: "services", label: "Services",          orient: "band", color: "#9ece6a", title: { side: "above" } },
+              { id: "data",     label: "Data & integrations", orient: "band", color: "#e0af68", title: { side: "above" } },
             ],
-
             blocks: [
-              { id: "browser", container: "client", type: "client", x: 120, y: 120, w: 220, h: 90,
-                label: "Browser\n(SPA)",
-                description: "The user-facing single-page app. Talks to the API over HTTPS and streams updates over SSE.",
-                tech: ["React", "EventSource"],
-                responsibilities: ["Render UI", "POST user actions", "Subscribe to SSE stream"] },
-              { id: "api", container: "backend", type: "http", x: 120, y: 360, w: 220, h: 90,
-                label: "API service",
-                description: "Thin HTTP layer. Validates requests, enqueues work, returns 202 immediately.",
-                tech: ["ASP.NET Core"],
-                responsibilities: ["Auth + validation", "Enqueue work", "Stream SSE back"] },
-              { id: "worker", container: "backend", type: "worker", x: 420, y: 360, w: 220, h: 90,
-                label: "Worker\n(BackgroundService)",
-                description: "Drains the queue and runs the long-lived job, writing results to the store.",
-                tech: ["IHostedService"],
-                responsibilities: ["Dequeue jobs", "Run async loop", "Persist results"] },
-              { id: "db", container: "data", type: "db", x: 420, y: 600, w: 220, h: 90,
-                label: "Database",
-                description: "Append-only event log + relational tables.",
-                tech: ["PostgreSQL"],
-                responsibilities: ["Persist state", "Serve reads"] },
-            ],
+              { id: "web",      container: "client",   type: "client",   x: 420,  y: 120, w: 200, h: 80,
+                label: "Web App",
+                description: "React single-page app, served from the CDN and talking to the gateway over HTTPS.",
+                tech: ["React", "Vite"], responsibilities: ["Render UI", "Call REST API", "Hold auth tokens"] },
+              { id: "mobile",   container: "client",   type: "client",   x: 720,  y: 120, w: 200, h: 80,
+                label: "Mobile App",
+                description: "Native client for iOS and Android sharing the same REST API.",
+                tech: ["React Native"], responsibilities: ["Render UI", "Call REST API", "Push notifications"] },
 
+              { id: "gateway",  container: "edge",     type: "http",     x: 420,  y: 340, w: 200, h: 80,
+                label: "API Gateway",
+                description: "Single entry point. Authentication, rate limiting, and routing to services.",
+                tech: ["Kong"], responsibilities: ["Route requests", "Rate limit", "Verify JWT"] },
+              { id: "cdn",      container: "edge",     type: "client",   x: 720,  y: 340, w: 200, h: 80,
+                label: "CDN",
+                description: "Caches and serves static assets close to the user.",
+                tech: ["CloudFront"], responsibilities: ["Serve assets", "TLS termination"] },
+
+              { id: "auth",     container: "services", type: "worker",   x: 160,  y: 560, w: 200, h: 80,
+                label: "Auth Service",
+                description: "Issues and validates session tokens; owns the user identity model.",
+                tech: ["Node.js"], responsibilities: ["Login / signup", "Issue JWT", "Manage sessions"] },
+              { id: "orders",   container: "services", type: "worker",   x: 460,  y: 560, w: 200, h: 80,
+                label: "Orders Service",
+                description: "Owns the order lifecycle and emits domain events.",
+                tech: ["Go"], responsibilities: ["Create orders", "Reserve stock", "Emit events"] },
+              { id: "payments", container: "services", type: "worker",   x: 760,  y: 560, w: 200, h: 80,
+                label: "Payments Service",
+                description: "Charges cards through Stripe and records the double-entry ledger.",
+                tech: ["Go"], responsibilities: ["Charge card", "Issue refunds", "Write ledger"] },
+
+              { id: "redis",    container: "data",     type: "db",       x: 160,  y: 820, w: 200, h: 80,
+                label: "Redis",
+                description: "Session store and hot-read cache.",
+                tech: ["Redis"], responsibilities: ["Session store", "Cache hot reads"] },
+              { id: "pg",       container: "data",     type: "db",       x: 460,  y: 820, w: 200, h: 80,
+                label: "PostgreSQL",
+                description: "Primary relational store for users, orders, and the ledger.",
+                tech: ["PostgreSQL 16"], responsibilities: ["Persist orders", "Persist users", "Ledger"] },
+              { id: "stripe",   container: "data",     type: "external", x: 760,  y: 820, w: 200, h: 80,
+                label: "Stripe",
+                description: "Card processing and payouts.",
+                tech: ["Stripe API"], responsibilities: ["Process payments"] },
+              { id: "sendgrid", container: "data",     type: "external", x: 1060, y: 820, w: 200, h: 80,
+                label: "SendGrid",
+                description: "Transactional email provider.",
+                tech: ["SendGrid API"], responsibilities: ["Send confirmations"] },
+            ],
             edges: [
-              { from: "browser", to: "api",    label: "POST /action", style: "sync" },
-              { from: "api",     to: "browser", label: "202 Accepted", style: "dashed", bendDir: -1 },
-              { from: "api",     to: "worker", label: "enqueue",      style: "async" },
-              { from: "worker",  to: "db",     label: "write result", style: "sync" },
-              { from: "db",      to: "worker", label: "load history", style: "dashed", bendDir: -1 },
+              { from: "web",      to: "gateway",  label: "HTTPS",      style: "sync" },
+              { from: "mobile",   to: "gateway",  label: "HTTPS",      style: "sync" },
+              { from: "cdn",      to: "web",      label: "assets",     style: "dashed", bendDir: -1 },
+              { from: "gateway",  to: "auth",     label: "auth",       style: "sync" },
+              { from: "gateway",  to: "orders",   label: "REST",       style: "sync" },
+              { from: "orders",   to: "payments", label: "charge",     style: "sync" },
+              { from: "auth",     to: "redis",    label: "session",    style: "sync" },
+              { from: "orders",   to: "pg",       label: "persist",    style: "sync" },
+              { from: "payments", to: "stripe",   label: "charge API", style: "async" },
+              { from: "orders",   to: "sendgrid", label: "email",      style: "async" },
             ],
           },
-
           {
-            id: "deploy",
-            label: "Deployment",
-            type: "system",
-
-            containers: [
-              { id: "edge",  label: "Edge",          orient: "band", color: "#3b82f6", title: { side: "above" } },
-              { id: "infra", label: "Infrastructure", orient: "band", color: "#374151", title: { side: "above" } },
-            ],
-
+            id: "order-flow",
+            label: "訂單流程",
+            type: "flow",
+            containers: [],
             blocks: [
-              { id: "cdn", container: "edge", type: "client", x: 160, y: 120, w: 220, h: 90,
-                label: "CDN / Edge",
-                description: "Terminates TLS and serves static assets close to the user.",
-                tech: ["CloudFront"],
-                responsibilities: ["Cache static assets", "TLS termination"] },
-              { id: "app", container: "infra", type: "worker", x: 160, y: 360, w: 220, h: 90,
-                label: "App container",
-                description: "Runs the API + worker image behind an internal load balancer.",
-                tech: ["ECS Fargate"],
-                responsibilities: ["Serve API", "Run background jobs"] },
-              { id: "store", container: "infra", type: "db", x: 540, y: 360, w: 220, h: 90,
-                label: "Managed store",
-                description: "Managed Postgres with automated backups.",
-                tech: ["RDS"],
-                responsibilities: ["Persist state", "Point-in-time recovery"] },
+              { id: "s1", type: "client", x: 120,  y: 240, w: 200, h: 80,
+                label: "Buy clicked",
+                description: "The user submits the cart from the web or mobile client.",
+                responsibilities: ["Collect cart", "POST /orders"] },
+              { id: "s2", type: "http",   x: 440,  y: 240, w: 200, h: 80,
+                label: "Validate",
+                description: "Gateway authenticates the caller and validates the payload.",
+                responsibilities: ["Verify JWT", "Validate payload"] },
+              { id: "s3", type: "worker", x: 760,  y: 240, w: 200, h: 80,
+                label: "Reserve stock",
+                description: "Orders service reserves inventory for the line items.",
+                responsibilities: ["Check stock", "Reserve units"] },
+              { id: "s4", type: "worker", x: 1080, y: 240, w: 200, h: 80,
+                label: "Charge card",
+                description: "Payments service charges the card via Stripe and awaits the result.",
+                responsibilities: ["Call Stripe", "Await result"] },
+              { id: "s5", type: "db",     x: 1400, y: 240, w: 200, h: 80,
+                label: "Confirm order",
+                description: "Order is persisted and a confirmation email is queued.",
+                responsibilities: ["Write order", "Emit confirmation"] },
             ],
-
             edges: [
-              { from: "cdn", to: "app",   label: "origin fetch", style: "sync" },
-              { from: "app", to: "store", label: "read / write", style: "sync" },
+              { from: "s1", to: "s2", label: "submit",   style: "sync" },
+              { from: "s2", to: "s3", label: "valid",    style: "sync" },
+              { from: "s3", to: "s4", label: "reserved", style: "sync" },
+              { from: "s4", to: "s5", label: "paid",     style: "sync" },
             ],
           },
         ],
@@ -622,10 +652,6 @@
       // === RENDER ==========================================================
       // All render functions take the TabRuntime they draw into.
       // =====================================================================
-      // defs ids are namespaced per tab — each tab has its own <svg>, and
-      // duplicate ids across tabs would make a hidden tab's filter/marker
-      // shadow a visible tab's reference (a filtered element whose filter
-      // lives in a display:none svg does not paint in Chrome).
       function mkDefs(svg, tabId) {
         const defs = svgEl("defs");
         ["sync", "async"].forEach((kind) => {
