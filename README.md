@@ -4,6 +4,18 @@ A Claude [skill](https://code.claude.com/docs/en/skills) / [plugin](https://code
 
 System architecture, sequence, and flow diagrams that you can **pan, zoom, drag, and explore** — with a baked-in layout guard that keeps everything from overlapping.
 
+## Preview
+
+The shots below are the bundled [`samples/ai-agent-platform.html`](samples/ai-agent-platform.html) — a full AI-agent app (chat UI → gateway → agent core → tools & retrieval → data & model providers) — opened straight in a browser.
+
+| Architecture (light) | Architecture (dark) |
+| --- | --- |
+| ![AI agent architecture, light theme](assets/screenshots/architecture-light.png) | ![AI agent architecture, Tokyo Night dark theme](assets/screenshots/architecture-dark.png) |
+
+| Click → details panel + chain highlight | Agent loop tab |
+| --- | --- |
+| ![Clicking a node opens a details panel and dims the rest of the diagram](assets/screenshots/details-panel.png) | ![The reason → act → observe agent loop](assets/screenshots/agent-loop-light.png) |
+
 ## Install
 
 With the [`skills`](https://github.com/vercel-labs/skills) CLI (works with Claude Code, Cursor, and other agents):
@@ -24,7 +36,7 @@ Once installed, just ask your agent to "draw a diagram of …" / "visualize this
 ## What you get
 
 - **One file, zero dependencies** — pure HTML + CSS + vanilla JS. Open it in any browser; share it as a single attachment.
-- **Tabbed multi-view** — one file can hold several related diagrams (e.g. *Architecture*, *Order flow*), switchable from a floating toolbar. A single-view file hides the tab strip.
+- **Tabbed multi-view** — one file can hold several related diagrams (e.g. *Architecture*, *Agent loop*, *Knowledge ingestion*), switchable from a floating toolbar. A single-view file hides the tab strip.
 - **Layout guard** — a per-tab engine that resolves overlap across four element categories (blocks, edge labels, container titles, container rectangles) and can **audit** the result. Found overlaps can be **auto-fixed** with one click.
 - **Rich interactions**
   - **Hover** a node → highlights its entire connected **chain** (upstream + downstream), dims the rest.
@@ -56,7 +68,7 @@ const app = {
 };
 ```
 
-The runtime builds the elements, runs the layout guard, and renders the SVG. See [`SKILL.md`](SKILL.md) for the full contract and [`samples/saas-platform.html`](samples/saas-platform.html) for a worked, two-tab example.
+The runtime builds the elements, runs the layout guard, and renders the SVG. See [`SKILL.md`](SKILL.md) for the full contract and [`samples/ai-agent-platform.html`](samples/ai-agent-platform.html) for a worked, three-tab example.
 
 ## Repository layout
 
@@ -64,7 +76,7 @@ The runtime builds the elements, runs the layout guard, and renders the SVG. See
 .
 ├── SKILL.md                      # the skill (instructions + contract for the agent)
 ├── assets/skeleton.html          # the self-contained renderer (the starting point)
-├── samples/saas-platform.html    # worked example: Architecture + Order flow tabs
+├── samples/ai-agent-platform.html # worked example: Architecture + Agent loop + Ingestion tabs
 └── .claude-plugin/
     ├── plugin.json               # Claude Code plugin manifest
     └── marketplace.json          # single-plugin marketplace manifest
