@@ -1,16 +1,29 @@
 ---
 name: interactive-diagram
-description: Build beautiful, interactive diagrams (system design, architecture, sequence, flow) as a single self-contained HTML file using only pure HTML, CSS, and vanilla JavaScript — no frameworks, no build step, no npm. Use this skill whenever the user asks to create, draw, generate, or visualize a system diagram, architecture diagram, sequence diagram, flowchart, data-flow diagram, component diagram, or any interactive technical diagram, even if they don't explicitly say "interactive" or "HTML." Also trigger when the user wants to turn a description of a system, services, components, or a process into a visual diagram they can pan, zoom, click, and explore in a browser.
+description: Build a beautiful, interactive technical diagram as a single self-contained HTML file — pure HTML, CSS, and vanilla JS, no frameworks, no build step, no CDN. Use whenever the user wants to create, draw, visualize, or explore a system/architecture, sequence, flow, data-flow, or component diagram in the browser, even if they don't say "interactive" or "HTML." Also covers a static, slide-ready "platform architecture" poster (capability columns + provider bar) exported as PNG/SVG for slides/PPT — trigger on "platform architecture", "平台架構", or any infographic-style architecture picture.
 ---
 
 # Interactive Diagram
 
-Produce a single self-contained `.html` file that renders a beautiful, interactive technical diagram. The user opens it by double-clicking — no install, no build, no server.
+Produce a single self-contained `.html` file that renders a beautiful technical diagram. The user opens it by double-clicking — no install, no build, no server.
+
+## Choose the output mode first
+
+This skill ships **two templates**. Pick one based on what the user wants, then copy that template and edit only its config.
+
+| Mode | Template | Use when |
+|------|----------|----------|
+| **Interactive explorable diagram** | [`assets/skeleton.html`](assets/skeleton.html) | The user wants a diagram they can **pan, zoom, drag, click, and explore** — system/architecture, sequence, or flow. Multi-tab, dark mode, side panels, hover-chain highlight. This is the default for "draw/visualize a diagram of …". |
+| **Platform architecture poster** (static) | [`assets/platform-skeleton.html`](assets/platform-skeleton.html) | The user wants a **polished, slide-ready infographic** of a platform/product architecture — a horizontal poster on a white background with a workflow row, capability columns, an API node, and a provider bar, **exported as PNG/SVG to paste into slides/PPT**. Trigger words: "platform architecture", "平台架構", "投影片 / PPT", "infographic", "capability + provider layout", "marketing-style architecture". **No** pan/zoom/dark-mode — it is a static poster by design. |
+
+If the request is ambiguous (e.g. just "draw our architecture"), default to the **interactive** mode unless the user mentions slides/PPT, a poster, or an infographic look. When in doubt, ask.
+
+The rest of this document covers the interactive mode first, then the platform poster ([jump to "Platform architecture poster"](#platform-architecture-poster-static)).
 
 ## Hard constraints
 
 - **Pure HTML + CSS + vanilla JS only.** No React, Vue, Svelte, no build step, no npm, no bundler.
-- **No CDN dependencies** unless the user explicitly opts in. Build the renderer from scratch with inline SVG and DOM events.
+- **No CDN dependencies** unless the user explicitly opts in. The skeleton renders everything from inline SVG and DOM events — keep it that way.
   - The one acceptable exception: if the user explicitly says "use Mermaid" or "Mermaid is fine," you may include the Mermaid CDN `<script>` and layer interactivity on top.
 - **One file.** All CSS in a single `<style>` tag, all JS in a single `<script>` tag, all markup in one HTML document.
 
@@ -93,19 +106,9 @@ layouts. **Before handing over the file, confirm the console shows
 `✓ Layout audit [<tab id>]: no overlaps` for every tab** — if it logs conflicts,
 adjust the starting hints or container membership and reload.
 
-## Required structure of the generated file
+## The config you edit
 
-Organize the `<script>` into clearly commented sections, in this order:
-
-```
-// === CONFIG ===     app data (tabs → containers, blocks, edges) lives here, nothing else
-// === RENDER ===     SVG construction, layout, edge routing
-// === INTERACTIONS === hover, click, drag, pan, zoom, panel
-// === EXPORT ===     SVG and PNG download
-// === INIT ===       wire it all up on DOMContentLoaded
-```
-
-The `CONFIG` block must be the first thing in the script and must be self-contained, so the user can edit only that object to change the diagram. Use this shape:
+The skeleton's `<script>` is already organized into commented sections — `CONFIG`, `RENDER`, `INTERACTIONS`, `EXPORT`, `INIT`. You touch **only `CONFIG`**; leave the rest alone unless the user asks for a genuinely new capability. Keep `CONFIG` self-contained and first in the script so the user can later edit just that object to change the diagram. The shape:
 
 ```js
 const app = {
@@ -141,97 +144,112 @@ const app = {
 For a single diagram, use exactly one entry in `tabs` — the tab strip stays
 hidden and the file behaves like a plain single diagram.
 
-## Required features
+## What the skeleton already gives you
 
-Render with **inline SVG**. SVG is interactive, scalable, and exportable — do not use Canvas for the diagram itself.
+The renderer, theme, and every interaction below ship in the skeleton — you don't build them. Your job is to author config so each one carries meaning (real chains to highlight, real descriptions in the panel, sensible node types for color). The behaviors, for reference:
 
-Interactions, all of which must work:
+- **Hover** a node → highlights its whole connected **chain** (everything upstream that reaches it plus everything downstream it reaches), dimming the rest. `chain()` computes it, `highlight()` applies it.
+- **Double-click** → pins that chain so it persists; double-click again (or click another node) to clear. Hover still previews while pinned (`state.pinned`).
+- **Click** → a side panel slides in with the node's label, type, description, tech, and responsibilities.
+- **Pan** by dragging empty canvas; **zoom** by wheel/pinch with `+`, `−`, and **Fit to screen** in the toolbar.
+- **Drag nodes** to reposition (edges follow); nodes are clamped to the viewport.
+- **Help** modal documents every interaction; close via X, backdrop, or `Esc`.
+- **Sequence step mode** (`type: "sequence"` only) → Prev/Next reveal messages one at a time along the lifelines.
+- **Dark mode**, **Download SVG**, and **Download PNG** (2× raster) all from the toolbar.
 
-1. **Hover** a node → highlight its **entire connected chain** (the full upstream flow that reaches it plus the full downstream flow it reaches, following edge direction), not just immediate neighbors; dim everything else via opacity transition. The skeleton's `chain()` computes this; `highlight()` applies it.
-2. **Double-click** a node → **pin** the chain highlight so it persists. Double-click again to unpin; clicking a different node also clears the pin. While pinned, hovering other nodes previews their chain and `mouseleave` restores the pinned one (per-tab `state.pinned`).
-3. **Click** a node → a side panel slides in from the right showing the node's label, type, description, tech, and responsibilities. Close via an X button or by clicking the backdrop.
-4. **Pan** by click-and-drag on empty canvas.
-5. **Zoom** with mouse wheel and trackpad pinch. Include `+`, `−`, and "Fit to screen" buttons in a floating toolbar.
-6. **Drag nodes** to reposition; edges must follow smoothly during the drag.
-7. **Help** button (`? Help`) in the toolbar → opens a modal documenting every interaction. Close via the X, the backdrop, or `Esc`.
-8. **Sequence-diagram step mode** (only when `type: "sequence"`): Prev / Next buttons that reveal messages one at a time along vertical lifelines.
-   Visuals:
+The diagram renders as **inline SVG** (interactive, scalable, exportable — not Canvas), with rounded nodes, soft shadows, curved/orthogonal edge routing, a per-`type` color legend, and a system font stack. The aesthetic target is clean and modern — think Linear, Vercel, or Stripe docs.
 
-- Modern aesthetic — clean like Linear, Vercel, or Stripe docs. No clip-art, no skeuomorphism.
-- Rounded rectangles for nodes. Soft drop shadows via SVG `<filter>` (gaussian blur + offset). Subtle gradients via `<linearGradient>`.
-- Distinct colors per node `type`, with a small legend pinned to a corner.
-- Edges with **curved or orthogonal routing** — never just straight lines for system diagrams. Use SVG `<marker>` for arrowheads.
-- Edge labels positioned along the path so they do not overlap the line itself (place on a small white/background-colored rect for legibility).
-- Smooth CSS transitions for hover, panel slide, and zoom level changes.
-- **Dark mode toggle** in the top-right corner. Theme via CSS custom properties (`--bg`, `--fg`, `--node-fill`, `--edge`, etc.) so toggling flips one attribute on `<html>`.
-- System font stack (`-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`). Generous spacing. No cramped text.
-  Export buttons in the toolbar:
+## What you author, and why it matters
 
-- **Download SVG** — serialize the current `<svg>` and trigger a download.
-- **Download PNG** — rasterize the SVG via a temporary `<canvas>` at 2× pixel ratio for crispness, then download.
+The skeleton handles geometry; you handle meaning. Two things are yours to get right:
 
-## Layout quality rules
+- **Container membership and starting hints.** Every block names a `container`, and `x/y/w/h` are *hints*, not final coordinates — `layout.run()` pushes blocks apart and grows containers around them. Group blocks the way the system actually decomposes (by tier, lane, or stage) so the auto-layout has a sensible starting shape to refine.
+- **Node `type` and content.** `type` drives color, so pick the one that reflects each node's role (client / http / worker / infra / queue / db / external). Fill `description`, `tech`, and `responsibilities` — an empty panel is a dead click.
 
-These constraints must be satisfied before the file is handed to the user. The goal is that someone who opens the file immediately sees a clean, readable diagram — not a puzzle of overlapping boxes. When you start from `assets/skeleton.html`, the **layout guard enforces most of these automatically** (each tab's `layout.run()` + `layout.audit()`); the rules below explain what it does and what you still set by hand (container membership, starting hints, edge routing).
+Pick the diagram `type` from what's being described: `system` for services and data stores, `sequence` for time-ordered messages between actors, `flow` for decision/process flows. If the request is ambiguous — missing components, unclear flow direction, unclear sync vs async — ask before inventing components.
 
-### No overlap
-Every node's bounding box must have at least **40 px of clearance** on all sides from every other node's bounding box. After computing initial `x, y` positions in the config, run a simple **collision-push loop** in the RENDER section: iterate over all node pairs, compute overlap, and push them apart along the axis of least resistance. Repeat until no pair overlaps (cap at ~30 iterations to avoid infinite loops). This means the x/y values in the config are *starting hints*, not final positions.
+## Before you hand it over
 
-### Full viewport visibility
-Compute the diagram's actual bounding box (min/max of all node positions + their width/height) after layout finalization, then set the SVG `viewBox` to that bounding box with **60 px of padding** on each side. This guarantees the user sees the whole diagram on first open without panning. The "Fit to screen" button should recalculate this same bounding box.
+The layout guard does the overlap work; your job is to confirm it succeeded and that the content reads well. Open the file and check:
 
-### Label containment
-Node labels must fit inside their node rectangles. Measure the label string length (approximate: `label.length * 7` px for the default font, or use a canvas `measureText` call) and size the node width to be at least `label_width + 32 px`. Multi-line labels (e.g., long service names) should either wrap or expand the node height — never clip or overflow. Do not use CSS `overflow: hidden` on SVG text.
+- The console shows `✓ Layout audit [<tab id>]: no overlaps` for **every** tab. If a tab logs conflicts, adjust that block's container membership or starting hints and reload — don't ship overlaps.
+- Every node's panel has real content, the chain highlight follows the true flow, and the legend matches the node types you used.
+- Dark mode, Fit to screen, and both exports work.
 
-### Edge clarity
-- Route edges so they don't pass through unrelated nodes. For `system` diagrams use curved Bézier paths that bow around congestion; for `flow` diagrams prefer orthogonal routing that steps around nodes.
-- Edge labels must sit on a small filled background rectangle (matching the canvas background color), so they are always legible regardless of what's behind them.
-- When two or more edges connect the same pair of nodes in the same direction, offset them slightly so they don't fully overlap.
-
-### UI chrome placement
-The floating toolbar, legend, and side panel must not permanently occlude diagram content. Pin the toolbar and legend to corners with a z-index above the SVG but ensure the initial viewBox computation (above) accounts for their footprint — add extra padding on whichever edges they occupy.
-
-### Drag constraints
-When the user drags a node, clamp its position so it cannot be dragged fully off the visible viewport. Nodes dragged to the edge should stop when their bounding box reaches the SVG canvas boundary.
+If the audit can't clear a stubborn tab on its own, the **⚑ Audit overlap** → auto-fix button restores the tidy built layout; reach for it before hand-tuning coordinates.
 
 ---
 
-## Workflow
+## Platform architecture poster (static)
 
-1. **Clarify before building.** If the user's description of the system is ambiguous (missing components, unclear direction of flow, unclear sync vs async), ask focused questions first. Do not invent components.
-2. **Pick a diagram type** based on what they're describing: `system` for architecture with services and data stores, `sequence` for time-ordered message exchanges between actors, `flow` for decision/process flows.
-3. **Lay out nodes deliberately.** Don't dump them in a grid. For system diagrams, group by tier (client → edge → services → data). For sequences, lifelines as evenly spaced vertical columns. For flows, top-to-bottom or left-to-right with branches. These positions go in the config as starting hints; the collision-push loop in RENDER will finalize them.
-4. **Write the config first**, then the renderer. The config should read like a clean summary of the system.
-5. **Run the layout quality checklist before declaring done.** Go through each item below and fix any that would obviously fail:
+A second template for a **static, slide-ready** architecture poster — the kind you paste into a deck. It is **not** interactive: no pan/zoom/dark-mode/panels. The headline feature is a clean horizontal layout that exports crisply to **PNG (for PPT)** and **SVG**, with a white background and white padding so it drops onto any slide.
 
-### Pre-delivery quality checklist
+### Starting point
 
-Walk through this mentally (or scan your generated coordinates) before handing over the file:
+Copy [`assets/platform-skeleton.html`](assets/platform-skeleton.html) to the output path and edit **only the `config` object** at the top of the script. A worked example lives at [`samples/platform-architecture.html`](samples/platform-architecture.html).
 
-- [ ] **No overlapping nodes** — every pair of nodes has ≥ 40 px clearance. The collision-push loop ran and converged.
-- [ ] **All nodes visible on open** — viewBox is set from actual final positions + 60 px padding; no node is clipped at the edge.
-- [ ] **Labels fit inside nodes** — node width ≥ label pixel width + 32 px; no text overflows its container.
-- [ ] **Edge labels are readable** — each label sits on a filled background rect; none are directly on top of the edge line with no background.
-- [ ] **Edges avoid unrelated nodes** — curved or orthogonal routes; no edge passes straight through a node it's not connected to.
-- [ ] **Parallel edges are offset** — multiple edges between the same nodes are visually distinct.
-- [ ] **Legend doesn't cover nodes** — legend is pinned to a corner with enough margin.
-- [ ] **Dark mode works** — all colors use CSS custom properties; the toggle produces a clean, readable result.
-- [ ] **Interactions work** — hover, click, drag, pan, zoom, fit, export SVG, export PNG would all function without obvious bugs.
+The poster is **composable**: `config.sections` is an ordered list. Each entry is rendered top-to-bottom and joined to the next by a connector. To change the picture, **add / remove / reorder sections** or edit their data — the layout restacks and the artwork height (and `viewBox`) recompute automatically. The chrome (export buttons, **⚑ 檢查溢出／重疊** audit button, hint) ships in **zh-TW**; all diagram text lives in `config`, so it is fully localizable.
 
-If any checkbox would fail, fix it before handing over.
+### Config shape
 
-## Common pitfalls to avoid
+```js
+const config = {
+  meta: { title, hint, width: 1440, pad: 30, margin: 40, gap: 28,
+          accent: "#3b6fe0", fileName: "platform-architecture" },
+  sections: [ /* ordered; each has a `type` and, optionally, a `connect` */ ],
+};
+```
 
-- **Don't skip the collision-push loop.** If you place nodes by hand and don't run a pass to check and fix overlaps, some nodes will inevitably overlap, especially in dense diagrams or when there are many edges forcing nodes close together.
-- **Don't set the viewBox to a fixed constant** like `0 0 1200 800`. Always derive it from the actual final node positions after layout, so nothing is cropped on first open.
-- **Don't route every edge as a straight line through other nodes.** Use curved Bézier paths for system diagrams or orthogonal (right-angle) routing. Detect rough overlaps and offset.
-- **Don't put edge labels directly on top of the line** — they become unreadable. Place them on a small filled background rect matching the canvas color.
-- **Don't forget to update edge endpoints during node drag.** A common bug is dragging a node and the edges stay anchored to the old position. Recompute edge `d` attributes (or `x1/y1/x2/y2`) on every `pointermove` during a drag.
-- **Don't use `transform: scale()` on the whole SVG for zoom** if you want crisp text and consistent stroke widths. Prefer manipulating the `viewBox` attribute.
-- **Don't hardcode colors in shape attributes.** Use CSS custom properties so dark mode is a one-line flip.
-- **Don't omit the legend.** If you're using color to encode node type, the user needs a key.
-- **Don't size nodes smaller than their label.** Measure the label (or estimate from character count) and ensure the node rectangle is wide/tall enough to contain it cleanly.
+`connect` on a section selects the connector drawn in the gap **below** it.
+
+### Section types
+
+| `type` | Renders | Key fields |
+|--------|---------|------------|
+| `workflow-row` | a row of horizontal step cards joined by `>` arrows | `items: [{ ic, t }]` (icon name + label) |
+| `platform-panel` | brand block (left) + inner white card of capability columns + an optional memory row | `brand: { name, sub, grad:[c1,c2] }`, `capabilities: [{ ic, tint, col, h, en, d:[lines], paren }]`, `memory: { ic, col, h, en, d, pills:[…] }` (omit `memory` to drop the row) |
+| `api-node` | a small circular hub node | `label` (string or `[line1, line2]`), `color` |
+| `provider-bar` | a bar with a brand on the left + provider chips on the right | `brand: { ic, h, sub, col }`, `items: [{ name, logo, g } | { name, more:true }]` (`more:true` renders a dashed "＋ …" placeholder) |
+
+### Connector types (`connect`)
+
+| value | draws |
+|-------|-------|
+| `arrows-down` | short down-arrow stubs under each card (workflow → next) |
+| `dashed-converge` | dashed curves converging from across the section's bottom to the next section's top anchor (→ api-node) |
+| `dashed-line` | a straight dashed line between the two anchors |
+| `none` (default) | gap only |
+
+### Icons
+
+Icons are a small inline **Lucide** (MIT) set in the `LUCIDE` map (`scan`, `edit`, `upload`, `report`, `plug`, `flow`, `agent`, `db`, `sparkles`, `check`). To add one, paste its 24×24 inner markup as a new `LUCIDE` entry and reference it by key. An unknown icon name logs a `console.warn` and renders nothing.
+
+### Overflow & overlap audit
+
+The poster has a **layout audit** — the static-poster analogue of the interactive skeleton's [layout guard](#the-layout-guard-makelayouttab). Because sections stack deterministically top-to-bottom, the failure modes aren't free-form collisions but: **(1) text wider than the box it sits in** (a capability header or description line, a workflow card label, a provider chip name, the brand caption, the pills row, the API-node label) and **(2) sibling boxes packed so tight they overlap** (too many provider chips, too many workflow cards). The audit detects both:
+
+- Each renderer records what it draws into a per-build collector (`ctx.audit`): `audit.box(id, group, …)` registers a rectangle for sibling-overlap checks; `fitText(audit, …)` registers that a string must stay inside an owner box (horizontal containment, measured with a canvas `measureText` against the real font).
+- `evalAudit()` walks the records and returns `{ ok, count, conflicts[] }`. It runs **automatically on load** — logging `✓ 版面檢查：無溢出或重疊` or a `console.table` of conflicts, and updating the toolbar hint with a pass/fail badge.
+- **⚑ 檢查溢出／重疊** re-runs it on demand: it pops an alert listing every conflict and **paints red dashed overlays** on each offender (red = text overflow, magenta = box overlap). Click again to clear the overlays. Overlays are never baked into a PNG/SVG export.
+
+**Before handing over, confirm the console shows `✓ 版面檢查：無溢出或重疊`.** If it reports conflicts, shorten the offending text or reduce item counts and reload — don't ship overflow. To audit a new element, call `fitText(...)` (text) or `ctx.audit.box(...)` (rectangle) from your renderer; everything else is automatic. The inline capability `en` tag is intentionally **not** audited (its X is a rough heuristic, so bounding it would be noisy).
+
+### Extending the framework
+
+- **New section type:** add a renderer to the `SECTIONS` registry keyed by the type name. It receives `(sec, ctx)` — `ctx = { x, y, w, cx, W, M, accent, audit }` (content box + artwork center + the [layout-audit](#overflow--overlap-audit) collector) — and must return `{ height, svg, topPort:{x,y}, bottomPorts:[{x,y}…] }`. The ports are where connectors attach; register any text/boxes you draw with `audit` so the overflow/overlap check covers them.
+- **New connector:** add a function to the `CONNECTORS` registry keyed by name; it receives `(fromPorts, toPort, cctx)` (`cctx = { x, w, cx, fromY, toPort }`) and returns an SVG string.
+- Reuse the helper vocabulary: `icon()`, `tx()`, `pill()`, `glassTile()`, `iconBox()`, `gloss()`, and the shared `DEFS` gradients/filters.
+
+### Poster quality checklist
+
+Before handing over, open the file in a browser and confirm:
+
+- [ ] **Layout audit passes** — the console shows `✓ 版面檢查：無溢出或重疊` and the toolbar hint reads `✓ 版面 OK`. If it reports conflicts, click **⚑ 檢查溢出／重疊** to see the red overlays, then shorten the text or reduce item counts and reload. See [Overflow & overlap audit](#overflow--overlap-audit).
+- [ ] **Text fits its box** — capability lines, card labels, chip names, brand caption, and the pills row don't spill outside their rectangles (the audit catches these).
+- [ ] **Sections don't overlap** and connectors land on the right anchors (arrows under cards, dashed curves into the API node, dashed line into the bar).
+- [ ] **White export padding present** — the artwork isn't flush to the edge.
+- [ ] **Export works** — `↓ PNG（貼到 PPT）` downloads a 2× PNG and `↓ SVG` downloads valid SVG with no unresolved `var(--…)`.
 
 ## Deliverable
 
-One `.html` file. Open it. It works. The user can edit the `app` config object at the top and reload to change the entire picture.
+One `.html` file. Open it. It works. The user can edit the config object at the top and reload to change the entire picture — `app` for the interactive skeleton, `config.sections` for the platform poster.

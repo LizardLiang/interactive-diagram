@@ -1,8 +1,8 @@
 {
   "name": "interactive-diagram",
   "displayName": "Interactive Diagram",
-  "version": "1.1.0",
-  "description": "Build beautiful, interactive technical diagrams (system / architecture / sequence / flow) as a single self-contained HTML file — pure HTML, CSS, and vanilla JS, no build step. Tabbed multi-view, pan / zoom / drag, connected-chain highlight, double-click pin, dark mode (Tokyo Night), overlap auto-fix, and SVG / PNG export.",
+  "version": "1.2.0",
+  "description": "Build beautiful, interactive technical diagrams (system / architecture / sequence / flow) as a single self-contained HTML file — pure HTML, CSS, and vanilla JS, no build step. Tabbed multi-view, pan / zoom / drag, connected-chain highlight, double-click pin, dark mode (Tokyo Night), overlap auto-fix, and SVG / PNG export. Plus a static, slide-ready platform-architecture poster mode with a built-in overflow / overlap audit.",
   "author": {
     "name": "LizardLiang",
     "url": "https://github.com/LizardLiang"

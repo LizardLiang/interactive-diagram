@@ -2,7 +2,12 @@
 
 A Claude [skill](https://code.claude.com/docs/en/skills) / [plugin](https://code.claude.com/docs/en/plugins) that turns a description of a system into a **beautiful, interactive diagram** — delivered as a single self-contained `.html` file you open by double-clicking. No frameworks, no build step, no server, no CDN.
 
-System architecture, sequence, and flow diagrams that you can **pan, zoom, drag, and explore** — with a baked-in layout guard that keeps everything from overlapping.
+System architecture, sequence, and flow diagrams that you can **pan, zoom, drag, and explore** — with a baked-in layout guard that keeps everything from overlapping. The agent never hand-writes a renderer: it edits **one config object** in a ready-made skeleton, and the runtime does the rest.
+
+Two templates ship in the box:
+
+- **Interactive diagram** ([`assets/skeleton.html`](assets/skeleton.html)) — the explorable, multi-tab renderer described above.
+- **Platform architecture poster** ([`assets/platform-skeleton.html`](assets/platform-skeleton.html)) — a polished, **static**, slide-ready infographic (workflow row → platform panel with capability columns → API hub → provider bar) on a white background, exported as **PNG/SVG to paste into slides/PPT**. Composable: add, remove, or reorder sections and the layout restacks itself. A built-in **overflow & overlap audit** (⚑ button + on-load console check) flags any text that spills its box or items packed too tight, painting red overlays on the offenders. See [`samples/platform-architecture.html`](samples/platform-architecture.html).
 
 ## Preview
 
@@ -74,9 +79,11 @@ The runtime builds the elements, runs the layout guard, and renders the SVG. See
 
 ```
 .
-├── SKILL.md                      # the skill (instructions + contract for the agent)
-├── assets/skeleton.html          # the self-contained renderer (the starting point)
-├── samples/ai-agent-platform.html # worked example: Architecture + Agent loop + Ingestion tabs
+├── SKILL.md                          # the skill (instructions + contract for the agent)
+├── assets/skeleton.html              # interactive renderer (the starting point)
+├── assets/platform-skeleton.html     # static platform-architecture poster template
+├── samples/ai-agent-platform.html    # worked example: Architecture + Agent loop + Ingestion tabs
+├── samples/platform-architecture.html # worked example: composable platform poster
 └── .claude-plugin/
     ├── plugin.json               # Claude Code plugin manifest
     └── marketplace.json          # single-plugin marketplace manifest
