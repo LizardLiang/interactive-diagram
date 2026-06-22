@@ -234,10 +234,16 @@
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
+      // Global text-scale lever. 1 = author's sizes. autoFix() lowers it to
+      // shrink every glyph uniformly when text overflows a fixed-size owner.
+      // BOTH tx() (drawing) and measureText() (audit + positioning) multiply by
+      // it, so the audit always reflects what is actually drawn.
+      let SCALE = 1;
       function tx(x, y, s, o = {}) {
         const ls = o.ls ? `letter-spacing="${o.ls}"` : "";
         const ff = o.mono ? `font-family="${MONO}"` : "";
-        return `<text x="${x}" y="${y}" font-size="${o.size}" font-weight="${o.weight || 400}" fill="${o.fill}" text-anchor="${o.anchor || "middle"}" ${ls} ${ff}>${esc(s)}</text>`;
+        const fs = (o.size * SCALE).toFixed(2);
+        return `<text x="${x}" y="${y}" font-size="${fs}" font-weight="${o.weight || 400}" fill="${o.fill}" text-anchor="${o.anchor || "middle"}" ${ls} ${ff}>${esc(s)}</text>`;
       }
       const gloss = (x, y, w, h, rx) =>
         `<rect x="${x}" y="${y}" width="${w}" height="${(h * 0.5).toFixed(1)}" rx="${rx}" fill="url(#tileGloss)" opacity="0.7"/>`;
@@ -276,7 +282,7 @@
       // console.table, and paints red highlight overlays on every offender.
       const _measureCtx = document.createElement("canvas").getContext("2d");
       function measureText(s, size, weight, mono) {
-        _measureCtx.font = `${weight || 400} ${size}px ${mono ? MONO : SANS}`;
+        _measureCtx.font = `${weight || 400} ${size * SCALE}px ${mono ? MONO : SANS}`;
         return _measureCtx.measureText(String(s)).width;
       }
       function overlaps(a, b, gap = 0) {
@@ -811,15 +817,111 @@
           hint.textContent = baseHint() + ` · ⚑ ${res.count} 個版面問題`;
           if (opts.announce) {
             paintAuditHL(res.conflicts);
-            alert(
+            const go = confirm(
               `⚑ 發現 ${res.count} 個版面問題：\n\n` +
                 res.conflicts.map((c) => "• " + c.msg).join("\n") +
-                "\n\n紅框已標示於圖上；請縮短文字或減少項目後重整。",
+                "\n\n要自動修正嗎？（加寬版面，必要時縮放文字）\n按「取消」則保留紅框標示。",
             );
+            if (go) runAutoFix();
           }
         }
         return res;
       }
+
+      // === AUTO-FIX ========================================================
+      // The deterministic analogue of the interactive skeleton's auto-fix.
+      // Two levers, applied by re-running build()+evalAudit() until the audit
+      // passes (or caps are hit):
+      //   1. grow meta.width — overlaps (chips/cards/sections) and any overflow
+      //      whose owner scales with width (capability columns, memory row,
+      //      workflow cards) ease as the artwork widens.
+      //   2. lower SCALE — once width is capped, shrink every glyph uniformly to
+      //      clear overflow on FIXED-size owners (chip names, the API node label,
+      //      the brand caption) that do not grow with width.
+      // It mutates config.meta.width + SCALE and re-renders, so PNG/SVG exports
+      // pick up the fixed layout automatically.
+      function autoFix() {
+        const m = config.meta;
+        const baseW = m.width || 1440;
+        const capW = Math.round(baseW * 1.7); // don't widen without bound
+        const stepW = 40,
+          floorS = 0.58,
+          stepS = 0.03;
+        let res = evalAudit(ART.audit);
+        let guard = 0;
+        while (!res.ok && guard++ < 200) {
+          const hasOverlap = res.conflicts.some((c) => c.kind === "overlap");
+          const hasOverflow = res.conflicts.some((c) => c.kind === "overflow");
+          if (m.width < capW && (hasOverlap || hasOverflow)) {
+            m.width += stepW; // widen first — fixes overlaps + width-derived overflow, keeps font size
+          } else if (hasOverflow && SCALE > floorS) {
+            // every remaining overflow is text wider than a FIXED-size owner;
+            // shrinking all glyphs uniformly always reduces it. One global lever
+            // keeps the poster visually consistent (vs. per-string font sizes).
+            SCALE = Math.max(floorS, +(SCALE - stepS).toFixed(3));
+          } else {
+            break; // out of levers (e.g. a single token longer than its box)
+          }
+          render();
+          res = evalAudit(ART.audit);
+        }
+        return res;
+      }
+      // Persist a successful auto-fix (option C): a local HTML page can't
+      // rewrite its own source file, so instead we serialize the current page
+      // and append a tiny override <script> before </body> that re-applies the
+      // resolved width + SCALE and re-renders on load. Reopening the downloaded
+      // file shows the fixed layout permanently — the original config is left
+      // intact, just overridden after it runs.
+      function downloadFixedHTML() {
+        clearAuditHL();
+        const stage = document.getElementById("stage");
+        const saved = stage.innerHTML;
+        stage.innerHTML = ""; // reopened file rebuilds fresh; keeps download small
+        let src = "<!doctype html>\n" + document.documentElement.outerHTML;
+        stage.innerHTML = saved; // restore the on-screen view
+        const override =
+          `\n<script>/* auto-fix baked in */ try { config.meta.width = ${config.meta.width}; SCALE = ${SCALE}; render(); auditLayout(); } catch (e) { console.warn(e); }<\/script>\n`;
+        src = src.includes("</body>")
+          ? src.replace("</body>", override + "</body>")
+          : src + override;
+        dl(new Blob([src], { type: "text/html" }), fileName() + "-fixed.html");
+      }
+
+      // Run auto-fix, then report the outcome through the normal audit UI.
+      function runAutoFix() {
+        clearAuditHL();
+        const before = evalAudit(ART.audit);
+        if (before.ok) {
+          auditLayout({ announce: true });
+          return;
+        }
+        const res = autoFix();
+        clearAuditHL();
+        const hint = document.getElementById("hint");
+        if (res.ok) {
+          const note =
+            (SCALE < 1 ? `文字縮放至 ${Math.round(SCALE * 100)}% · ` : "") +
+            `版面寬度 ${config.meta.width}px`;
+          console.log("%c⚒ 已自動修正：無溢出或重疊", "color:#0a8a0a;font-weight:700");
+          hint.textContent = baseHint() + " · ⚒ 已自動修正";
+          const save = confirm(
+            `⚒ 已自動修正：版面無溢出或重疊。\n（${note}）\n\n` +
+              `要下載修正後的 HTML（${fileName()}-fixed.html）以保存嗎？\n` +
+              `重新開啟該檔即為修正後版面。`,
+          );
+          if (save) downloadFixedHTML();
+        } else {
+          paintAuditHL(res.conflicts);
+          hint.textContent = baseHint() + ` · ⚑ 仍有 ${res.count} 個問題`;
+          alert(
+            `⚒ 已盡力修正，仍有 ${res.count} 個問題無法自動解決：\n\n` +
+              res.conflicts.map((c) => "• " + c.msg).join("\n") +
+              "\n\n紅框已標示；請縮短該文字或減少項目。",
+          );
+        }
+      }
+
       auditLayout(); // run on load: log + hint badge, no popup
       document.getElementById("audit").onclick = () => {
         // toggle: if highlights are showing, clear them; otherwise run + announce

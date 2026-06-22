@@ -1,6 +1,6 @@
 ---
 name: interactive-diagram
-description: Build a beautiful, interactive technical diagram as a single self-contained HTML file — pure HTML, CSS, and vanilla JS, no frameworks, no build step, no CDN. Use whenever the user wants to create, draw, visualize, or explore a system/architecture, sequence, flow, data-flow, or component diagram in the browser, even if they don't say "interactive" or "HTML." Also covers a static, slide-ready "platform architecture" poster (capability columns + provider bar) exported as PNG/SVG for slides/PPT — trigger on "platform architecture", "平台架構", or any infographic-style architecture picture.
+description: Build a beautiful, interactive technical diagram as a single self-contained HTML file — pure HTML, CSS, and vanilla JS, no frameworks, no build step, no CDN. Use whenever the user wants to create, draw, visualize, or explore a system/architecture, sequence, flow, data-flow, or component diagram in the browser, even if they don't say "interactive" or "HTML." Also covers a static, slide-ready "platform architecture" poster (capability columns + provider bar) exported as PNG/SVG for slides/PPT — trigger on "platform architecture", "平台架構", "platform diagram", "平台圖", "infographic", "投影片/PPT/deck/pitch", or any infographic-style architecture picture. When a request could be either an explorable diagram or a slide poster and gives no clear cue, ask which before building.
 ---
 
 # Interactive Diagram
@@ -16,7 +16,22 @@ This skill ships **two templates**. Pick one based on what the user wants, then 
 | **Interactive explorable diagram** | [`assets/skeleton.html`](assets/skeleton.html) | The user wants a diagram they can **pan, zoom, drag, click, and explore** — system/architecture, sequence, or flow. Multi-tab, dark mode, side panels, hover-chain highlight. This is the default for "draw/visualize a diagram of …". |
 | **Platform architecture poster** (static) | [`assets/platform-skeleton.html`](assets/platform-skeleton.html) | The user wants a **polished, slide-ready infographic** of a platform/product architecture — a horizontal poster on a white background with a workflow row, capability columns, an API node, and a provider bar, **exported as PNG/SVG to paste into slides/PPT**. Trigger words: "platform architecture", "平台架構", "投影片 / PPT", "infographic", "capability + provider layout", "marketing-style architecture". **No** pan/zoom/dark-mode — it is a static poster by design. |
 
-If the request is ambiguous (e.g. just "draw our architecture"), default to the **interactive** mode unless the user mentions slides/PPT, a poster, or an infographic look. When in doubt, ask.
+### Route by intent — and ask when it's genuinely ambiguous
+
+Run this check **first**, before copying any template. Do **not** silently default — a wrong guess means rebuilding the whole diagram, which costs far more than one question.
+
+1. **Platform poster** when the request carries any *slide / marketing / poster* signal:
+   `platform architecture`, `平台架構`, **`platform diagram` / `平台圖`**, `poster`, `infographic`, `one-pager`, `投影片 / 簡報 / PPT / slides / deck / pitch / board`, `capability columns`, `provider / vendor bar`, "for my deck/slides", "marketing/sales diagram". The poster is static (no pan/zoom) and exports to PNG/SVG — that is its entire reason to exist.
+2. **Interactive diagram** when the request carries any *explore / engineering* signal:
+   `interactive`, `explore`, `pan / zoom / drag / clickable`, `click through`, `sequence`, `flow`, `data-flow`, `hover`, or it **names concrete components/services to wire together with edges** (e.g. "API, Kafka, workers, Postgres").
+   **Precedence:** an explicit *slide/poster* word (clause 1: poster / infographic / slides / deck / PPT / 投影片) is decisive for the poster even if "diagram" also appears; an explicit *interaction/sequence* word (clause 2: interactive / pan / zoom / click / explore / sequence) is decisive for the interactive mode even if "platform" also appears. Only fall through to step 3 when neither kind of explicit word is present.
+3. **If neither is decisive** — bare "draw our architecture", "make a diagram of X", or **"platform diagram" / "平台圖" standing alone** (a domain noun, no slide *and* no interaction word) — **ask with `AskUserQuestion` before building**:
+   - header `Diagram type`, question "Which kind of diagram do you want?"
+   - **Interactive HTML** — "Pan / zoom / click to explore in the browser; best for engineering docs and walking through a system."
+   - **Platform poster** — "Static, slide-ready infographic (capability columns + provider bar), exported as PNG/SVG for a deck/PPT."
+   Then build the chosen mode.
+
+> Why this rule exists: "platform diagram" reads as the poster to a human (it *is* the poster's name), but the word "diagram" alone used to fall through to the interactive default — so a poster request silently produced an explorable flowchart. Lean poster when the noun is *platform / poster / infographic / slide*; lean interactive when it's *explore / sequence / components*; otherwise ask.
 
 The rest of this document covers the interactive mode first, then the platform poster ([jump to "Platform architecture poster"](#platform-architecture-poster-static)).
 
@@ -230,9 +245,10 @@ The poster has a **layout audit** — the static-poster analogue of the interact
 
 - Each renderer records what it draws into a per-build collector (`ctx.audit`): `audit.box(id, group, …)` registers a rectangle for sibling-overlap checks; `fitText(audit, …)` registers that a string must stay inside an owner box (horizontal containment, measured with a canvas `measureText` against the real font).
 - `evalAudit()` walks the records and returns `{ ok, count, conflicts[] }`. It runs **automatically on load** — logging `✓ 版面檢查：無溢出或重疊` or a `console.table` of conflicts, and updating the toolbar hint with a pass/fail badge.
-- **⚑ 檢查溢出／重疊** re-runs it on demand: it pops an alert listing every conflict and **paints red dashed overlays** on each offender (red = text overflow, magenta = box overlap). Click again to clear the overlays. Overlays are never baked into a PNG/SVG export.
+- **⚑ 檢查溢出／重疊** re-runs it on demand. If the layout is clean it just confirms so; if it finds conflicts it **paints red dashed overlays** on each offender (red = text overflow, magenta = box overlap) and **offers to auto-fix** in the same dialog (OK = auto-fix, Cancel = keep the overlays). Click the button again to clear the overlays. Overlays are never baked into a PNG/SVG export.
+- **Auto-fix** (offered from that ⚑ dialog — no separate button) is the static-poster analogue of the interactive skeleton's auto-fix. `autoFix()` re-runs `build()` + `evalAudit()` in a loop against two safe levers until the audit passes (or caps are hit): **(1)** it grows `config.meta.width` (overlaps and any overflow whose owner scales with width — capability columns, the memory row, workflow cards — ease as the artwork widens, with no font-size change); then **(2)** once width is capped (1.7×) it lowers a global text **`SCALE`** (consulted by both `tx()` and `measureText()`, so the audit always matches what is drawn) to shrink every glyph uniformly and clear overflow on **fixed-size owners** (chip names, the API-node label, the brand caption). It mutates `config.meta.width` + `SCALE` and re-renders, so PNG/SVG exports pick up the fixed layout. If a single token is simply longer than its box, auto-fix reports what it could not resolve and leaves the red overlay — shorten that one string by hand.
 
-**Before handing over, confirm the console shows `✓ 版面檢查：無溢出或重疊`.** If it reports conflicts, shorten the offending text or reduce item counts and reload — don't ship overflow. To audit a new element, call `fitText(...)` (text) or `ctx.audit.box(...)` (rectangle) from your renderer; everything else is automatic. The inline capability `en` tag is intentionally **not** audited (its X is a rough heuristic, so bounding it would be noisy).
+**Before handing over, confirm the console shows `✓ 版面檢查：無溢出或重疊`.** If it reports conflicts, run **⚑ 檢查溢出／重疊** and accept the auto-fix offer (or shorten the offending text / reduce item counts and reload) — don't ship overflow. To audit a new element, call `fitText(...)` (text) or `ctx.audit.box(...)` (rectangle) from your renderer; everything else is automatic. The inline capability `en` tag is intentionally **not** audited (its X is a rough heuristic, so bounding it would be noisy).
 
 ### Extending the framework
 
@@ -244,7 +260,7 @@ The poster has a **layout audit** — the static-poster analogue of the interact
 
 Before handing over, open the file in a browser and confirm:
 
-- [ ] **Layout audit passes** — the console shows `✓ 版面檢查：無溢出或重疊` and the toolbar hint reads `✓ 版面 OK`. If it reports conflicts, click **⚑ 檢查溢出／重疊** to see the red overlays, then shorten the text or reduce item counts and reload. See [Overflow & overlap audit](#overflow--overlap-audit).
+- [ ] **Layout audit passes** — the console shows `✓ 版面檢查：無溢出或重疊` and the toolbar hint reads `✓ 版面 OK`. If it reports conflicts, click **⚑ 檢查溢出／重疊** and accept the auto-fix offer to auto-resolve them (or shorten the text / reduce item counts and reload). See [Overflow & overlap audit](#overflow--overlap-audit).
 - [ ] **Text fits its box** — capability lines, card labels, chip names, brand caption, and the pills row don't spill outside their rectangles (the audit catches these).
 - [ ] **Sections don't overlap** and connectors land on the right anchors (arrows under cards, dashed curves into the API node, dashed line into the bar).
 - [ ] **White export padding present** — the artwork isn't flush to the edge.
