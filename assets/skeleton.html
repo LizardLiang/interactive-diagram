@@ -65,6 +65,11 @@
         --c-db-fill: #e5e7eb;
         --c-external-fill: #fee2e2;
         --c-queue-fill: #ede9fe;
+
+        /* sequence message stroke palette */
+        --seq-slate: #475569;
+        --seq-accent: #6366f1;
+        --seq-gray: #94a3b8;
       }
       /* Dark theme — Tokyo Night palette (tokyo-night/tokyo-night-vscode-theme) */
       [data-theme="dark"] {
@@ -94,6 +99,10 @@
         --c-db-fill: #4a3a1f;
         --c-external-fill: #4d2935;
         --c-queue-fill: #382e58;
+
+        --seq-slate: #9aa5ce;
+        --seq-accent: #7dcfff;
+        --seq-gray: #565f89;
       }
 
       * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -180,7 +189,7 @@
       .panel-resp-item { font-size: 13px; line-height: 1.6; padding: 5px 0; border-bottom: 1px solid var(--border); }
       .panel-resp-item:last-child { border-bottom: none; }
 
-      .node-group, .edge-group { transition: opacity 0.18s; }
+      .node-group, .edge-group, .msg-group { transition: opacity 0.18s; }
       .dimmed { opacity: 0.12; }
 
       /* === HELP MODAL ======================================================= */
@@ -228,7 +237,7 @@
 
     <div id="canvas"></div>
 
-    <div id="legend"><h3>節點類型</h3><div id="legend-items"></div></div>
+    <div id="legend"><h3 id="legend-title">節點類型</h3><div id="legend-items"></div></div>
 
     <div id="panel-backdrop"></div>
     <div id="side-panel">
@@ -359,6 +368,38 @@
               { from: "app", to: "store", label: "read / write", style: "sync" },
             ],
           },
+
+          // A SEQUENCE (lifeline) tab. Instead of containers/blocks/edges it
+          // carries `actors` (vertical lifelines, left→right in array order) and
+          // `messages` (ordered events, top→bottom). A message is a cross arrow
+          // when from!==to, or a self-loop when from===to. `style` drives the
+          // stroke/marker; `type` on an actor drives its color from TYPE.
+          {
+            id: "seq-demo",
+            label: "Sequence",
+            type: "sequence",
+            actors: [                          // order = left→right; middle actor is the pivot
+              { id: "a", label: "Actor A", type: "client" },
+              { id: "b", label: "Actor B", type: "worker" },
+              { id: "c", label: "Actor C", type: "db" },
+            ],
+            messages: [
+              { from: "a", to: "b", style: "sync",     label: "① Request to B",
+                description: "Dummy step 1.", tech: ["dummy"], responsibilities: ["dummy"] },
+              { from: "b", to: "b", style: "internal", label: "② B internal work",
+                description: "Dummy self-step on B.", tech: ["dummy"], responsibilities: ["dummy"] },
+              { from: "b", to: "b", style: "internal", label: "③ B second internal step",
+                description: "Dummy self-step.", tech: ["dummy"], responsibilities: ["dummy"] },
+              { from: "b", to: "a", style: "stream",   label: "④ Result back to A",
+                description: "Dummy result to A.", tech: ["dummy"], responsibilities: ["dummy"] },
+              { from: "a", to: "a", style: "internal", label: "⑤ A reviews internally",
+                description: "Dummy self-step on A.", tech: ["dummy"], responsibilities: ["dummy"] },
+              { from: "a", to: "b", style: "sync",     label: "⑥ A confirms to B",
+                description: "Dummy confirm.", tech: ["dummy"], responsibilities: ["dummy"] },
+              { from: "a", to: "c", style: "sync",     label: "⑦ A acts on C directly",
+                description: "Dummy direct action on C — skips B.", tech: ["dummy"], responsibilities: ["dummy"] },
+            ],
+          },
         ],
       };
 
@@ -376,6 +417,20 @@
       const TYPE_LABELS = {
         client: "用戶端", http: "HTTP / 控制器", worker: "工作程序 / 服務",
         infra: "基礎設施", queue: "通道 / 佇列", db: "資料庫", external: "外部 API",
+      };
+
+      // Sequence message styles → stroke color + dash pattern. The arrowhead is
+      // colored via marker fill="context-stroke", so one marker matches every
+      // style. `internal` is the self-loop style (from === to).
+      //   sync = solid slate · stream = solid accent · return = dashed gray
+      const MSG_STYLE = {
+        sync:     { stroke: "var(--seq-slate)",  dash: null },
+        stream:   { stroke: "var(--seq-accent)", dash: null },
+        return:   { stroke: "var(--seq-gray)",   dash: "7 5" },
+        internal: { stroke: "var(--seq-slate)",  dash: null },
+      };
+      const MSG_STYLE_LABELS = {
+        sync: "同步 sync", stream: "串流 stream", return: "回傳 return", internal: "內部 internal",
       };
 
       // =====================================================================
@@ -621,6 +676,14 @@
           m.appendChild(svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--edge)" }));
           defs.appendChild(m);
         });
+        // sequence arrowhead — fill follows the line stroke (context-stroke) so a
+        // single marker serves every message style (slate / accent / gray).
+        const sm = svgEl("marker", {
+          id: `seqarrow-${tabId}`, viewBox: "0 0 10 10", refX: "9", refY: "5",
+          markerWidth: "8", markerHeight: "8", orient: "auto-start-reverse",
+        });
+        sm.appendChild(svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: "context-stroke" }));
+        defs.appendChild(sm);
         const f = svgEl("filter", { id: `shadow-${tabId}`, x: "-20%", y: "-20%", width: "140%", height: "140%" });
         f.appendChild(svgEl("feDropShadow", { dx: "0", dy: "2", stdDeviation: "3", "flood-color": "#000", "flood-opacity": "0.18" }));
         defs.appendChild(f);
@@ -773,6 +836,138 @@
         return g;
       }
 
+      // =====================================================================
+      // === SEQUENCE RENDER =================================================
+      // A lifeline diagram. Actors are vertical lifelines (left→right in array
+      // order); messages are ordered rows (top→bottom). Routed through the same
+      // buildTab / fit / zoom / export / panel machinery — only this render
+      // branch and fit()'s bbox differ from the system/flow types.
+      // =====================================================================
+      const SEQ = {
+        leftPad: 70,    // equal left/right margin
+        actorW: 0,      // computed per tab from the widest label
+        actorH: 52,
+        gapX: 300,      // adjacent lifelines ~300px apart (center to center)
+        topY: 40,       // top actor-box row
+        rowGap: 56,     // gap from top boxes to first message row
+        stepCross: 64,  // vertical advance after a cross message
+        stepSelf: 82,   // vertical advance after a self message
+        loopW: 50, loopH: 34,
+        labelFS: 18, labelH: 30,
+      };
+
+      function drawSequenceTab(tab, { refit = true } = {}) {
+        const svg = tab.svg;
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        tab.state.msgEls = [];
+        const measure = tab.layout.measureText;
+
+        // actor box width hugs the widest label (kept uniform so lifelines align)
+        let actorW = 150;
+        tab.actors.forEach((a) => { actorW = Math.max(actorW, measure(a.label, 15) + 44); });
+        const S = SEQ, idxOf = {};
+        tab.actors.forEach((a, i) => (idxOf[a.id] = i));
+        const cx = (i) => S.leftPad + actorW / 2 + i * S.gapX;
+
+        // assign a row y to each message; step depends on the message kind
+        let y = S.topY + S.actorH + S.rowGap;
+        tab.messages.forEach((m) => { m._y = y; y += (m.from === m.to) ? S.stepSelf : S.stepCross; });
+        // after the loop `y` already sits one step below the last row → use it
+        // (minus a touch) as the bottom actor-box row, so there's balanced air.
+        const lifelineTop = S.topY + S.actorH;
+        const bottomBoxY = y - 18;
+        const lifelineBot = bottomBoxY;
+
+        mkDefs(svg, tab.id);
+        const lifeG = svgEl("g"), msgG = svgEl("g"), actorG = svgEl("g");
+        svg.appendChild(lifeG); svg.appendChild(msgG); svg.appendChild(actorG);
+
+        // --- lifelines + top/bottom actor boxes (UML style) ---------------
+        tab.actors.forEach((a, i) => {
+          const x = cx(i), col = TYPE[a.type] || TYPE.worker;
+          lifeG.appendChild(svgEl("line", {
+            x1: x, y1: lifelineTop, x2: x, y2: lifelineBot,
+            stroke: col.stroke, "stroke-width": "1.5", "stroke-dasharray": "6 6", opacity: "0.5",
+          }));
+          [S.topY, bottomBoxY].forEach((by) => {
+            actorG.appendChild(svgEl("rect", {
+              x: x - actorW / 2, y: by, width: actorW, height: S.actorH, rx: 12,
+              fill: col.fill, stroke: col.stroke, "stroke-width": "2", filter: `url(#shadow-${tab.id})`,
+            }));
+            const t = svgEl("text", {
+              x, y: by + S.actorH / 2 + 5, "text-anchor": "middle",
+              "font-size": "15", "font-weight": "600", fill: "var(--fg)",
+            });
+            t.textContent = a.label; actorG.appendChild(t);
+          });
+        });
+
+        // --- messages ------------------------------------------------------
+        let bbMinX = cx(0) - actorW / 2, bbMaxX = cx(tab.actors.length - 1) + actorW / 2;
+        const labelBox = (g, lx, ly, lw) => {
+          g.appendChild(svgEl("rect", { x: lx, y: ly, width: lw, height: S.labelH, rx: 7,
+            fill: "var(--surface)", stroke: "var(--border)", "stroke-width": "1" }));
+        };
+        tab.messages.forEach((m, idx) => {
+          const g = svgEl("g"); g.classList.add("msg-group"); g.dataset.idx = idx; g.style.cursor = "pointer";
+          const st = MSG_STYLE[m.style] || MSG_STYLE.sync;
+          const dash = st.dash ? { "stroke-dasharray": st.dash } : {};
+          const yy = m._y, lw = measure(m.label, S.labelFS) + 20;
+
+          if (m.from === m.to) {
+            // self message — small loop hanging off the RIGHT of the lifeline
+            const x = cx(idxOf[m.from]);
+            const d = `M${x},${yy} h${S.loopW} v${S.loopH} h${-S.loopW}`;
+            g.appendChild(svgEl("path", { d, fill: "none", stroke: "transparent", "stroke-width": "16", "pointer-events": "stroke" }));
+            g.appendChild(svgEl("path", { d, fill: "none", stroke: st.stroke, "stroke-width": "2",
+              "marker-end": `url(#seqarrow-${tab.id})`, ...dash }));
+            const lx = x + S.loopW + 12, ly = yy + S.loopH / 2 - S.labelH / 2;
+            labelBox(g, lx, ly, lw);
+            const t = svgEl("text", { x: lx + lw / 2, y: ly + S.labelH / 2 + 6, "text-anchor": "middle",
+              "font-size": S.labelFS, "font-weight": "600", fill: "var(--fg)" });
+            t.textContent = m.label; g.appendChild(t);
+            bbMaxX = Math.max(bbMaxX, lx + lw);
+          } else {
+            // cross message — horizontal arrow from→to; passes OVER any
+            // in-between lifeline (drawn above it) without stopping there.
+            const x1 = cx(idxOf[m.from]), x2 = cx(idxOf[m.to]);
+            const d = `M${x1},${yy} L${x2},${yy}`;
+            g.appendChild(svgEl("path", { d, fill: "none", stroke: "transparent", "stroke-width": "16", "pointer-events": "stroke" }));
+            g.appendChild(svgEl("path", { d, fill: "none", stroke: st.stroke, "stroke-width": "2.5",
+              "marker-end": `url(#seqarrow-${tab.id})`, ...dash }));
+            const mxp = (x1 + x2) / 2, lx = mxp - lw / 2, ly = yy - S.labelH - 8;
+            labelBox(g, lx, ly, lw);
+            const t = svgEl("text", { x: mxp, y: ly + S.labelH / 2 + 6, "text-anchor": "middle",
+              "font-size": S.labelFS, "font-weight": "600", fill: "var(--fg)" });
+            t.textContent = m.label; g.appendChild(t);
+            bbMinX = Math.min(bbMinX, lx); bbMaxX = Math.max(bbMaxX, lx + lw);
+          }
+          g.addEventListener("mouseenter", () => seqHighlight(tab, idx));
+          g.addEventListener("mouseleave", () => seqClear(tab));
+          msgG.appendChild(g);
+          tab.state.msgEls[idx] = g;
+        });
+
+        tab.state.contentBBox = { x: bbMinX, y: S.topY, w: bbMaxX - bbMinX, h: (bottomBoxY + S.actorH) - S.topY };
+        if (refit || !tab.state.vb) fit(tab); else applyViewBox(tab);
+      }
+
+      function seqHighlight(tab, idx) {
+        tab.state.msgEls.forEach((g, i) => g.classList.toggle("dimmed", i !== idx));
+      }
+      function seqClear(tab) {
+        tab.state.msgEls.forEach((g) => g.classList.remove("dimmed"));
+      }
+      function openMessagePanel(tab, m) {
+        const fromA = tab.actors.find((a) => a.id === m.from);
+        const toA = tab.actors.find((a) => a.id === m.to);
+        openPanel({
+          type: (fromA || {}).type,
+          badgeLabel: `${(fromA || {}).label || m.from} → ${(toA || {}).label || m.to}`,
+          label: m.label, description: m.description, tech: m.tech, responsibilities: m.responsibilities,
+        });
+      }
+
       function updateEdges(tab) {
         tab.edges.forEach((edge, idx) => {
           const rec = tab.state.edgeEls[idx]; if (!rec) return;
@@ -818,9 +1013,15 @@
         tab.svg.setAttribute("viewBox", `${tab.state.vb.x} ${tab.state.vb.y} ${tab.state.vb.w} ${tab.state.vb.h}`);
       }
       function fit(tab) {
-        const items = tab.layout.reg.block.map((e) => e.get()).concat(tab.layout.reg.container.map((e) => e.get()));
-        const minX = Math.min(...items.map((b) => b.x)), minY = Math.min(...items.map((b) => b.y));
-        const maxX = Math.max(...items.map((b) => b.x + b.w)), maxY = Math.max(...items.map((b) => b.y + b.h));
+        let minX, minY, maxX, maxY;
+        if (tab.type === "sequence") {
+          const b = tab.state.contentBBox;
+          minX = b.x; minY = b.y; maxX = b.x + b.w; maxY = b.y + b.h;
+        } else {
+          const items = tab.layout.reg.block.map((e) => e.get()).concat(tab.layout.reg.container.map((e) => e.get()));
+          minX = Math.min(...items.map((b) => b.x)); minY = Math.min(...items.map((b) => b.y));
+          maxX = Math.max(...items.map((b) => b.x + b.w)); maxY = Math.max(...items.map((b) => b.y + b.h));
+        }
         const pad = 60;
         tab.state.vb = { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
         applyViewBox(tab);
@@ -835,14 +1036,16 @@
 
       function wireInteractions() {
         const canvas = document.getElementById("canvas");
-        let panning = false, dragBlock = null, last = null, downAt = null, downNodeId = null;
+        let panning = false, dragBlock = null, last = null, downAt = null, downNodeId = null, downMsgIdx = null;
         let panelTimer = null, lastClick = null; // single- vs double-click disambiguation
 
         canvas.addEventListener("pointerdown", (e) => {
           const tab = activeTab(); if (!tab) return;
           const ng = e.target.closest(".node-group");
+          const mg = e.target.closest(".msg-group"); // sequence message (no drag — click only)
           downAt = { x: e.clientX, y: e.clientY };
           downNodeId = ng ? ng.dataset.id : null; // captured BEFORE setPointerCapture, when e.target is reliable
+          downMsgIdx = mg ? +mg.dataset.idx : null;
           if (ng) { dragBlock = tab.blocks.find((n) => n.id === ng.dataset.id); }
           else { panning = true; }
           last = { x: e.clientX, y: e.clientY };
@@ -865,6 +1068,11 @@
         canvas.addEventListener("pointerup", (e) => {
           const tab = activeTab();
           const moved = downAt && (Math.abs(e.clientX - downAt.x) + Math.abs(e.clientY - downAt.y) > 4);
+          // sequence: a click (no drag) on a message opens its side panel.
+          if (tab && tab.type === "sequence") {
+            if (downMsgIdx != null && !moved) openMessagePanel(tab, tab.messages[downMsgIdx]);
+            panning = false; last = null; downMsgIdx = null; downAt = null; return;
+          }
           // Use the node captured at pointerdown — pointer capture makes the
           // pointerup target the canvas, not the node. Detect single vs double
           // click manually so a double-click pins WITHOUT also opening the panel.
@@ -1099,7 +1307,7 @@
       function openPanel(block) {
         const c = TYPE[block.type] || TYPE.worker;
         const badge = document.getElementById("panel-type-badge");
-        badge.textContent = TYPE_LABELS[block.type] || block.type;
+        badge.textContent = block.badgeLabel || TYPE_LABELS[block.type] || block.type;
         badge.style.background = c.fill; badge.style.color = c.stroke;
         document.getElementById("panel-title").textContent = block.label.replace(/\n/g, " ");
         document.getElementById("panel-desc").textContent = block.description || "";
@@ -1142,6 +1350,14 @@
         const tab = activeTab();
         const clone = tab.svg.cloneNode(true);
         clone.setAttribute("xmlns", SVG_NS);
+        // Pin width/height to the active viewBox so the export keeps the
+        // diagram's own aspect ratio. Without explicit dimensions an SVG with
+        // only a viewBox rasterizes at the browser's 300×150 default and comes
+        // out stretched when drawn onto an aspect-correct canvas.
+        const vb = tab.state.vb;
+        clone.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+        clone.setAttribute("width", vb.w);
+        clone.setAttribute("height", vb.h);
         // inline the resolved CSS variables so the export is portable
         const cs = getComputedStyle(document.documentElement);
         let xml = new XMLSerializer().serializeToString(clone);
@@ -1170,8 +1386,32 @@
       }
 
       function renderLegend(tab) {
+        const title = document.getElementById("legend-title");
+        const box = document.getElementById("legend-items");
+        if (tab.type === "sequence") {
+          title.textContent = "圖例";
+          // a small line swatch for an arrow style (loop glyph for `internal`)
+          const swatch = (color, dash, loop) => {
+            if (loop) return `<svg width="22" height="12" style="flex-shrink:0"><path d="M2,2 h10 v8 h-10" fill="none" stroke="${color}" stroke-width="2"/></svg>`;
+            const da = dash ? ` stroke-dasharray="${dash}"` : "";
+            return `<svg width="22" height="12" style="flex-shrink:0"><line x1="1" y1="6" x2="18" y2="6" stroke="${color}" stroke-width="2"${da}/><path d="M15,2 L21,6 L15,10 z" fill="${color}"/></svg>`;
+          };
+          const actors = tab.actors.map((a) =>
+            `<div class="legend-item"><div class="legend-dot" style="background:${(TYPE[a.type] || TYPE.worker).stroke}"></div>${a.label}</div>`
+          ).join("");
+          const sub = `font-size:10px;font-weight:600;color:var(--fg-muted);text-transform:uppercase;letter-spacing:.05em;margin:8px 0 5px`;
+          const styles = [["sync", false, false], ["stream", false, false], ["return", true, false], ["internal", false, true]]
+            .map(([k, dashed, loop]) => {
+              const color = k === "stream" ? "var(--seq-accent)" : k === "return" ? "var(--seq-gray)" : "var(--seq-slate)";
+              const dash = dashed ? "5 4" : "";
+              return `<div class="legend-item">${swatch(color, dash, loop)}${MSG_STYLE_LABELS[k]}</div>`;
+            }).join("");
+          box.innerHTML = `<div style="${sub};margin-top:0">生命線</div>${actors}<div style="${sub}">箭頭樣式</div>${styles}`;
+          return;
+        }
+        title.textContent = "節點類型";
         const used = [...new Set(tab.blocks.map((n) => n.type))];
-        document.getElementById("legend-items").innerHTML = used.map((t) =>
+        box.innerHTML = used.map((t) =>
           `<div class="legend-item"><div class="legend-dot" style="background:${TYPE[t].stroke}"></div>${TYPE_LABELS[t] || t}</div>`
         ).join("");
       }
@@ -1181,9 +1421,14 @@
       // =====================================================================
       // Build a tab's <svg> + layout guard on first activation, then cache it.
       function buildTab(def) {
-        const tab = { def, svg: null, layout: null, state: { vb: null, nodeEls: {}, edgeEls: [], pinned: null }, built: false };
+        const tab = { def, svg: null, layout: null, state: { vb: null, nodeEls: {}, edgeEls: [], msgEls: [], pinned: null }, built: false };
         // expose def fields directly on the runtime for the render/layout code
-        tab.blocks = def.blocks; tab.containers = def.containers; tab.edges = def.edges; tab.id = def.id; tab.type = def.type;
+        tab.id = def.id; tab.type = def.type;
+        if (def.type === "sequence") {
+          tab.actors = def.actors; tab.messages = def.messages;
+        } else {
+          tab.blocks = def.blocks; tab.containers = def.containers; tab.edges = def.edges;
+        }
         tab.layout = makeLayout(tab);
 
         const svg = svgEl("svg");
@@ -1193,9 +1438,11 @@
         App.tabs[def.id] = tab;
 
         drawTab(tab, { refit: true });   // resolve + draw + frame
-        tab.layout.audit();              // log ✓ / ✗ for this tab
-        // remember the tidy built layout so auto-fix can restore it
-        tab.home = tab.blocks.map((b) => ({ id: b.id, x: b.x, y: b.y }));
+        if (tab.type !== "sequence") {
+          tab.layout.audit();            // log ✓ / ✗ for this tab (system/flow only)
+          // remember the tidy built layout so auto-fix can restore it
+          tab.home = tab.blocks.map((b) => ({ id: b.id, x: b.x, y: b.y }));
+        }
         tab.built = true;
         return tab;
       }
@@ -1204,6 +1451,7 @@
       // resolvers first, so calling it again after nodes were dragged retidies
       // the diagram — this is what the auto-fix uses.
       function drawTab(tab, { refit = true } = {}) {
+        if (tab.type === "sequence") { drawSequenceTab(tab, { refit }); return; }
         const svg = tab.svg;
         while (svg.firstChild) svg.removeChild(svg.firstChild);
         tab.layout.clear();
