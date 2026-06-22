@@ -21,6 +21,14 @@ The shots below are the bundled [`samples/ai-agent-platform.html`](samples/ai-ag
 | --- | --- |
 | ![Clicking a node opens a details panel and dims the rest of the diagram](assets/screenshots/details-panel.png) | ![The reason → act → observe agent loop](assets/screenshots/agent-loop-light.png) |
 
+### Sequence (lifeline) diagrams
+
+The same renderer also draws **UML-style sequence diagrams** — set a tab's `type` to `"sequence"` and give it `actors` (vertical lifelines) and `messages` (ordered events) instead of containers/blocks/edges. Cross arrows show who calls whom (a call to a non-adjacent lifeline reads as a clean "skip"), self-loops show internal work, and the four message styles — **sync**, **stream**, **return**, **internal** — are color- and stroke-coded. Click any message for its details panel; hover to dim the rest.
+
+| Sequence (light) | Sequence (dark) |
+| --- | --- |
+| ![Request-flow sequence diagram, light theme](assets/screenshots/sequence-light.png) | ![Request-flow sequence diagram, Tokyo Night dark theme](assets/screenshots/sequence-dark.png) |
+
 ## Install
 
 With the [`skills`](https://github.com/vercel-labs/skills) CLI (works with Claude Code, Cursor, and other agents):
@@ -41,7 +49,8 @@ Once installed, just ask your agent to "draw a diagram of …" / "visualize this
 ## What you get
 
 - **One file, zero dependencies** — pure HTML + CSS + vanilla JS. Open it in any browser; share it as a single attachment.
-- **Tabbed multi-view** — one file can hold several related diagrams (e.g. *Architecture*, *Agent loop*, *Knowledge ingestion*), switchable from a floating toolbar. A single-view file hides the tab strip.
+- **Multiple diagram types** — `type: "system"` (containers + blocks + edges) for architecture/flow views, and `type: "sequence"` (actors + messages) for UML lifeline diagrams. Tabs can mix types freely.
+- **Tabbed multi-view** — one file can hold several related diagrams (e.g. *Architecture*, *Agent loop*, *Request flow*), switchable from a floating toolbar. A single-view file hides the tab strip.
 - **Layout guard** — a per-tab engine that resolves overlap across four element categories (blocks, edge labels, container titles, container rectangles) and can **audit** the result. Found overlaps can be **auto-fixed** with one click.
 - **Rich interactions**
   - **Hover** a node → highlights its entire connected **chain** (upstream + downstream), dims the rest.
@@ -68,6 +77,18 @@ const app = {
           description: "...", tech: ["React"], responsibilities: ["Render UI"] },
       ],
       edges: [ { from: "web", to: "api", label: "HTTPS", style: "sync" } ],
+    },
+    {
+      id: "flow", label: "Request flow", type: "sequence",
+      actors: [
+        { id: "user", label: "User", type: "client" },
+        { id: "api",  label: "API",  type: "http" },
+      ],
+      messages: [
+        { from: "user", to: "api",  style: "sync",   label: "POST /chat",
+          description: "...", tech: ["HTTPS"], responsibilities: ["Submit prompt"] },
+        { from: "api",  to: "user", style: "return", label: "SSE chunks" },
+      ],
     },
   ],
 };
