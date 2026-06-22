@@ -66,7 +66,7 @@
         --c-external-fill: #fee2e2;
         --c-queue-fill: #ede9fe;
       }
-      /* Dark theme — Tokyo Night palette (enkia/tokyo-night) */
+      /* Dark theme — Tokyo Night palette (tokyo-night/tokyo-night-vscode-theme) */
       [data-theme="dark"] {
         --bg: #1a1b26;
         --surface: #24283b;
@@ -523,26 +523,11 @@
           /* top (inside, top-left) */ return { x: L(s) + 8, y: T(s) + 6, w, h };
         }
 
-        // --- edge-label vertical de-overlap (runs on DOM after render) ----
-        function resolveLabels(maxIter = 80) {
-          const items = reg.label.map((e) => ({ e, b: e.get() })).filter((x) => x.b);
-          for (let it = 0; it < maxIter; it++) {
-            let moved = false;
-            for (let i = 0; i < items.length; i++) {
-              for (let j = i + 1; j < items.length; j++) {
-                const a = items[i].b, b = items[j].b;
-                const p = penetration(a, b, GAP.label);
-                if (p.ox > 0 && p.oy > 0) {
-                  const d = p.oy / 2 + 0.5;
-                  if (cy(a) <= cy(b)) { a.y -= d; b.y += d; } else { a.y += d; b.y -= d; }
-                  moved = true;
-                }
-              }
-            }
-            if (!moved) break;
-          }
-          items.forEach((x) => x.e.set(x.b));
-        }
+        // --- edge-label placement (runs on DOM after render) --------------
+        // Delegates to placeLabels() in the render layer, which slides each
+        // label ALONG its own curve to the clearest spot (away from blocks,
+        // titles and sibling labels) instead of detaching it vertically.
+        function resolveLabels() { placeLabels(tab); }
 
         // --- the auditor --------------------------------------------------
         // Walks every conflicting category pair and reports overlaps. Also
@@ -656,30 +641,61 @@
           return { x: dx > 0 ? me.x + me.w : me.x, y: my };
         return { x: mx, y: dy > 0 ? me.y + me.h : me.y };
       }
-      function curve(p1, p2, bend = 1) {
+      // quadratic control point: chord midpoint pushed `28*bend` along the
+      // perpendicular. Shared by curve() and the label-on-curve geometry.
+      function ctrlPoint(p1, p2, bend = 1) {
         const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
         const nx = -(p2.y - p1.y), ny = p2.x - p1.x;
         const len = Math.hypot(nx, ny) || 1;
         const off = 28 * bend;
-        return `M${p1.x},${p1.y} Q${mx + (nx / len) * off},${my + (ny / len) * off} ${p2.x},${p2.y}`;
+        return { x: mx + (nx / len) * off, y: my + (ny / len) * off };
+      }
+      function curve(p1, p2, bend = 1) {
+        const c = ctrlPoint(p1, p2, bend);
+        return `M${p1.x},${p1.y} Q${c.x},${c.y} ${p2.x},${p2.y}`;
+      }
+      // point on the quadratic Bézier at parameter t∈[0,1]
+      function bezierAt(p1, c, p2, t) {
+        const u = 1 - t;
+        return {
+          x: u * u * p1.x + 2 * u * t * c.x + t * t * p2.x,
+          y: u * u * p1.y + 2 * u * t * c.y + t * t * p2.y,
+        };
+      }
+      // t of the curve point closest to `pt` (coarse sample, good enough for hover)
+      function nearestT(p1, c, p2, pt) {
+        let best = 0.5, bestD = Infinity;
+        for (let i = 0; i <= 24; i++) {
+          const t = i / 24, q = bezierAt(p1, c, p2, t);
+          const d = (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2;
+          if (d < bestD) { bestD = d; best = t; }
+        }
+        return best;
+      }
+      // {p1, c, p2} for an edge from the CURRENT block positions
+      function edgeCurve(tab, edge) {
+        const p1 = port(tab, edge.from, edge.to, true), p2 = port(tab, edge.from, edge.to, false);
+        return { p1, c: ctrlPoint(p1, p2, edge.bendDir || 1), p2 };
       }
 
       function renderEdge(tab, edge, idx) {
         const g = svgEl("g"); g.classList.add("edge-group"); g.dataset.idx = idx;
         const p1 = port(tab, edge.from, edge.to, true), p2 = port(tab, edge.from, edge.to, false);
         const d = curve(p1, p2, edge.bendDir || 1);
+        // wide transparent hit stroke so the thin line is easy to hover
+        const hit = svgEl("path", { d, fill: "none", stroke: "transparent", "stroke-width": "18", "pointer-events": "stroke" });
         const path = svgEl("path", {
           d, fill: "none", stroke: "var(--edge)", "stroke-width": "2",
           "marker-end": `url(#arrow-${edge.style === "async" ? "async" : "sync"}-${tab.id})`,
           ...(edge.style === "dashed" ? { "stroke-dasharray": "6 5" } : {}),
         });
-        g.appendChild(path);
+        g.appendChild(hit); g.appendChild(path);
 
-        let bg = null, txt = null;
+        let bg = null, txt = null, labelW = 0;
         if (edge.label) {
           const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
-          const w = tab.layout.measureText(edge.label, 11) + 14;
-          bg = svgEl("rect", { x: mx - w / 2, y: my - 11, width: w, height: 19, rx: 5, fill: "var(--bg)", opacity: "0.92" });
+          labelW = tab.layout.measureText(edge.label, 11) + 14;
+          bg = svgEl("rect", { x: mx - labelW / 2, y: my - 11, width: labelW, height: 19, rx: 5, fill: "var(--bg)", opacity: "0.92" });
           txt = svgEl("text", { x: mx, y: my + 3, "text-anchor": "middle", "font-size": "11", fill: "var(--fg-muted)" });
           txt.textContent = edge.label;
           g.appendChild(bg); g.appendChild(txt);
@@ -691,8 +707,13 @@
               bg.setAttribute("x", box.x); bg.setAttribute("y", box.y);
               txt.setAttribute("x", box.x + box.w / 2); txt.setAttribute("y", box.y + 14);
             });
+
+          // hover-follow: while pointing AT this line, the label rides the curve
+          // to the point nearest the cursor; it snaps home on leave.
+          g.addEventListener("mousemove", (e) => moveLabelToPoint(tab, idx, svgPoint(tab, e.clientX, e.clientY)));
+          g.addEventListener("mouseleave", () => restoreLabel(tab, idx));
         }
-        tab.state.edgeEls[idx] = { g, path, bg, txt };
+        tab.state.edgeEls[idx] = { g, hit, path, bg, txt, labelW, labelHome: null };
         return g;
       }
 
@@ -715,8 +736,17 @@
         tab.state.nodeEls[block.id] = g;
 
         // hover highlight (per block, scoped to this tab)
-        g.addEventListener("mouseenter", () => highlight(tab, block.id));
-        g.addEventListener("mouseleave", () => { if (tab.state.pinned) highlight(tab, tab.state.pinned); else clearHighlight(tab); });
+        const attached = () => tab.edges.map((e, i) => (e.from === block.id || e.to === block.id) ? i : -1).filter((i) => i >= 0);
+        // Place the attached labels ONCE, near where the cursor entered, then
+        // leave them put — they must not jitter as the mouse roams the block.
+        g.addEventListener("mouseenter", (e) => {
+          highlight(tab, block.id);
+          moveLabelsToPoint(tab, attached(), svgPoint(tab, e.clientX, e.clientY));
+        });
+        g.addEventListener("mouseleave", () => {
+          attached().forEach((i) => restoreLabel(tab, i));
+          if (tab.state.pinned) highlight(tab, tab.state.pinned); else clearHighlight(tab);
+        });
 
         // register the block box (live: reads the data, which drag updates)
         tab.layout.register("block", block.id,
@@ -747,12 +777,16 @@
         tab.edges.forEach((edge, idx) => {
           const rec = tab.state.edgeEls[idx]; if (!rec) return;
           const p1 = port(tab, edge.from, edge.to, true), p2 = port(tab, edge.from, edge.to, false);
-          rec.path.setAttribute("d", curve(p1, p2, edge.bendDir || 1));
+          const d = curve(p1, p2, edge.bendDir || 1);
+          rec.path.setAttribute("d", d); if (rec.hit) rec.hit.setAttribute("d", d);
           if (rec.bg && rec.txt) {
+            // cheap re-centering on the chord midpoint while a block is dragged;
+            // the full slide-along placement re-runs on pointerup.
             const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
             const w = +rec.bg.getAttribute("width");
             rec.bg.setAttribute("x", mx - w / 2); rec.bg.setAttribute("y", my - 11);
             rec.txt.setAttribute("x", mx); rec.txt.setAttribute("y", my + 3);
+            rec.labelHome = { x: mx - w / 2, y: my - 11 };
           }
         });
       }
@@ -856,6 +890,8 @@
               }, 280);
             }
           }
+          // a block was dragged to a new spot → re-tidy label placement
+          if (dragBlock && moved && tab) tab.layout.resolveLabels();
           dragBlock = null; panning = false; last = null; downNodeId = null;
         });
         canvas.addEventListener("wheel", (e) => {
@@ -917,6 +953,147 @@
       function clearHighlight(tab) {
         tab.blocks.forEach((n) => tab.state.nodeEls[n.id].classList.remove("dimmed"));
         tab.edges.forEach((e, i) => tab.state.edgeEls[i].g.classList.remove("dimmed"));
+      }
+
+      // ---------------------------------------------------------------------
+      // Edge-label placement & hover-follow.
+      // A label rides its OWN curve; placeLabels picks the clearest resting
+      // point along it, and hover slides it to the cursor without detaching.
+      // ---------------------------------------------------------------------
+      const LABEL_H = 19;
+      // sum of overlap "area" of `box` against every obstacle (0 ⇒ clear)
+      function labelScore(tab, box, obstacles) {
+        let s = 0;
+        for (const o of obstacles) {
+          const p = tab.layout.penetration(box, o, 4);
+          if (p.ox > 0 && p.oy > 0) s += p.ox * p.oy;
+        }
+        return s;
+      }
+      // place a label centered on the curve point at parameter t
+      function labelBoxAt(p1, c, p2, t, w) {
+        const q = bezierAt(p1, c, p2, t);
+        return { x: q.x - w / 2, y: q.y - LABEL_H / 2, w, h: LABEL_H };
+      }
+      function setLabelBox(rec, box) {
+        rec.bg.setAttribute("x", box.x); rec.bg.setAttribute("y", box.y);
+        rec.txt.setAttribute("x", box.x + box.w / 2); rec.txt.setAttribute("y", box.y + 14);
+      }
+      // unit normal of the curve at t (for nudging a label off the line)
+      function curveNormal(p1, c, p2, t) {
+        const tx = 2 * (1 - t) * (c.x - p1.x) + 2 * t * (p2.x - c.x);
+        const ty = 2 * (1 - t) * (c.y - p1.y) + 2 * t * (p2.y - c.y);
+        const l = Math.hypot(tx, ty) || 1;
+        return { x: -ty / l, y: tx / l };
+      }
+      function labelBoxAtOff(p1, c, p2, t, off, w) {
+        const q = bezierAt(p1, c, p2, t), n = curveNormal(p1, c, p2, t);
+        return { x: q.x + n.x * off - w / 2, y: q.y + n.y * off - LABEL_H / 2, w, h: LABEL_H };
+      }
+      // Place each label at the clearest spot, searching first ALONG its curve
+      // (slide the anchor point) and then a small perpendicular nudge OFF the
+      // curve so it can escape a block the line passes through while staying
+      // visually attached. Iterates so labels react to each other.
+      const T_CANDIDATES = [0.5, 0.4, 0.6, 0.32, 0.68, 0.25, 0.75];
+      const N_OFFSETS = [0, 13, -13, 24, -24];
+      function placeLabels(tab) {
+        const labeled = tab.edges
+          .map((edge, idx) => ({ edge, idx, rec: tab.state.edgeEls[idx] }))
+          .filter((x) => x.rec && x.rec.bg && x.rec.txt);
+        if (!labeled.length) return;
+        // static obstacles: every block box + every container title box
+        const statics = [
+          ...tab.layout.reg.block.map((e) => e.get()),
+          ...tab.layout.reg.title.map((e) => e.get()),
+        ].filter(Boolean);
+
+        // seed each label on its curve midpoint (t = 0.5, no offset)
+        labeled.forEach(({ edge, rec }) => {
+          const { p1, c, p2 } = edgeCurve(tab, edge);
+          rec._curve = { p1, c, p2 };
+          rec._box = labelBoxAt(p1, c, p2, 0.5, rec.labelW);
+        });
+
+        for (let pass = 0; pass < 3; pass++) {
+          labeled.forEach(({ rec }, k) => {
+            const { p1, c, p2 } = rec._curve;
+            const short = Math.hypot(p2.x - p1.x, p2.y - p1.y) < rec.labelW * 0.8;
+            const others = labeled.filter((_, j) => j !== k).map((o) => o.rec._box);
+            const obstacles = statics.concat(others);
+            let best = rec._box, bestScore = Infinity;
+            // a short chord can't slide; only let it nudge perpendicular
+            const ts = short ? [0.5] : T_CANDIDATES;
+            for (const t of ts) {
+              for (const off of N_OFFSETS) {
+                const box = labelBoxAtOff(p1, c, p2, t, off, rec.labelW);
+                // prefer the centre of the line and the line itself (small bias)
+                const sc = labelScore(tab, box, obstacles) + Math.abs(t - 0.5) * 0.01 + Math.abs(off) * 0.02;
+                if (sc < bestScore) { bestScore = sc; best = box; }
+              }
+              if (bestScore === 0) break;
+            }
+            rec._box = best;
+          });
+        }
+
+        labeled.forEach(({ rec }) => {
+          setLabelBox(rec, rec._box);
+          rec.labelHome = { x: rec._box.x, y: rec._box.y };
+        });
+      }
+      // hover: ride the label to the curve point nearest the cursor, but keep
+      // it clear of the ports — the curve endpoints sit ON the connected blocks,
+      // so an unclamped nearestT (when the cursor is on the far side of a block)
+      // would centre the label on the block edge and overlap it.
+      // Place one followed label at the point on its line nearest the cursor,
+      // then slide the MINIMUM along the line needed to clear its endpoint
+      // blocks AND any boxes in `avoid` (sibling labels already placed during
+      // the same block hover). Returns the final box (or null).
+      function placeFollowLabel(tab, idx, pt, avoid) {
+        const rec = tab.state.edgeEls[idx]; if (!rec || !rec.bg) return null;
+        const edge = tab.edges[idx];
+        const { p1, c, p2 } = edgeCurve(tab, edge);
+        // The cursor-nearest point on the line is the ideal anchor, but the
+        // ports sit on the connected blocks and siblings on other lines exit the
+        // same corner. Scan the whole line for the spot that least overlaps the
+        // endpoint blocks and the already-placed siblings, biased toward the
+        // anchor — so each label hugs the cursor yet the fan spreads out.
+        const anchorT = nearestT(p1, c, p2, pt);
+        const obstacles = [edge.from, edge.to]
+          .map((id) => tab.blocks.find((b) => b.id === id))
+          .filter(Boolean).map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h }))
+          .concat(avoid || []);
+        let best = null, bestScore = Infinity;
+        for (let tt = 0; tt <= 1.0001; tt += 0.02) {
+          for (const off of N_OFFSETS) {            // small perpendicular nudge to dodge siblings
+            const box = labelBoxAtOff(p1, c, p2, tt, off, rec.labelW);
+            let area = 0;
+            for (const o of obstacles) { const p = tab.layout.penetration(box, o, 2); if (p.ox > 0 && p.oy > 0) area += p.ox * p.oy; }
+            // clearance first; then stay near the cursor and on the line
+            const score = area + Math.abs(tt - anchorT) * 6 + Math.abs(off) * 0.4;
+            if (score < bestScore) { bestScore = score; best = box; }
+          }
+        }
+        setLabelBox(rec, best);
+        return best;
+      }
+      function moveLabelToPoint(tab, idx, pt) { placeFollowLabel(tab, idx, pt, null); }
+      // Block hover: place every attached label, each avoiding the siblings
+      // already placed, so multiple lines into one block don't stack labels.
+      // Nearest lines first, so the closest label keeps the spot by the cursor.
+      function moveLabelsToPoint(tab, indices, pt) {
+        const order = indices.slice().sort((a, b) => {
+          const ca = edgeCurve(tab, tab.edges[a]), cb = edgeCurve(tab, tab.edges[b]);
+          const da = nearestT(ca.p1, ca.c, ca.p2, pt), db = nearestT(cb.p1, cb.c, cb.p2, pt);
+          const qa = bezierAt(ca.p1, ca.c, ca.p2, da), qb = bezierAt(cb.p1, cb.c, cb.p2, db);
+          return Math.hypot(qa.x - pt.x, qa.y - pt.y) - Math.hypot(qb.x - pt.x, qb.y - pt.y);
+        });
+        const placed = [];
+        order.forEach((i) => { const box = placeFollowLabel(tab, i, pt, placed); if (box) placed.push(box); });
+      }
+      function restoreLabel(tab, idx) {
+        const rec = tab.state.edgeEls[idx]; if (!rec || !rec.bg || !rec.labelHome) return;
+        setLabelBox(rec, { x: rec.labelHome.x, y: rec.labelHome.y, w: rec.labelW });
       }
 
       function openPanel(block) {
