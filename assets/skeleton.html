@@ -512,30 +512,83 @@
         function clear() { for (const k in reg) reg[k] = []; }
         function all() { return [...reg.block, ...reg.label, ...reg.title, ...reg.container]; }
 
-        // --- block ↔ block collision push (SKILL.md "collision-push loop") -
-        // Operates on tab.blocks data BEFORE render. Pushes overlapping pairs
-        // apart along the axis of least resistance.
-        function resolveBlocks(maxIter = 60) {
-          const ns = tab.blocks;
-          for (let it = 0; it < maxIter; it++) {
-            let moved = false;
-            for (let i = 0; i < ns.length; i++) {
-              for (let j = i + 1; j < ns.length; j++) {
-                const a = ns[i], b = ns[j];
-                const p = penetration(a, b, GAP.block);
-                if (p.ox > 0 && p.oy > 0) {
-                  if (p.ox < p.oy) {                 // push horizontally
-                    const d = p.ox / 2 + 0.5;
-                    if (cx(a) <= cx(b)) { a.x -= d; b.x += d; } else { a.x += d; b.x -= d; }
-                  } else {                            // push vertically
-                    const d = p.oy / 2 + 0.5;
-                    if (cy(a) <= cy(b)) { a.y -= d; b.y += d; } else { a.y += d; b.y -= d; }
-                  }
-                  moved = true;
-                }
+        // --- BFS pin-settled block resolver (replaces the old all-pairs
+        // relaxation loop, which moved BOTH boxes on every conflicting pair
+        // and could exit mid-conflict when maxIter was hit). Anchor = the
+        // top-left block; it and every later "settled" block are pinned and
+        // NEVER move again. Each remaining block is visited in a spatial
+        // nearest-neighbor wavefront and pushed — itself only — the minimum
+        // distance needed to clear every already-settled block. Because
+        // settled boxes are fixed obstacles, once a block settles it has
+        // ZERO overlap with everything placed before it; processing every
+        // block this way yields a globally overlap-free layout. -----------
+        // O(n^3): the while loop runs n-1 times, each pick scans every
+        // remaining block against every already-ordered block. Deliberate,
+        // not an oversight — diagrams run to tens of blocks, where this is
+        // negligible; a k-d tree / grid index would only pay off at a scale
+        // this skeleton isn't meant for.
+        function bfsOrderFromTopLeft(ns) {
+          if (!ns.length) return [];
+          // stable tie-break: pre-sort by (cy, cx) so ties in nearest-
+          // neighbor distance resolve to the earlier reading-order item.
+          const remaining = ns.slice().sort((a, b) => (cy(a) - cy(b)) || (cx(a) - cx(b)));
+          const order = [remaining.shift()]; // anchor = min(cy, cx), pinned first
+          while (remaining.length) {
+            let bestIdx = 0, bestD = Infinity;
+            for (let i = 0; i < remaining.length; i++) {
+              const r = remaining[i];
+              for (const o of order) {
+                const d = (cx(r) - cx(o)) ** 2 + (cy(r) - cy(o)) ** 2;
+                if (d < bestD) { bestD = d; bestIdx = i; }
               }
             }
-            if (!moved) break;
+            order.push(remaining.splice(bestIdx, 1)[0]);
+          }
+          return order;
+        }
+        // Move `cur` only (mutates cur.x / cur.y) until clear of every box in
+        // `settled` (plain {x,y,w,h} snapshots — they never move). Escapes
+        // along the axis of least penetration against the deepest offender,
+        // one offender at a time. A bounded iteration cap + far-corner park
+        // fallback guarantees both termination and a conflict-free result.
+        function pushClear(cur, settled, gap) {
+          const MAX = 200;
+          if (!settled.length) return true;
+          for (let iter = 0; iter < MAX; iter++) {
+            let worst = null, worstDepth = 0, worstP = null;
+            for (const box of settled) {
+              const p = penetration(cur, box, gap);
+              if (p.ox > 0 && p.oy > 0) {
+                const depth = p.ox * p.oy; // deepest penetration = largest overlap area
+                if (depth > worstDepth) { worstDepth = depth; worst = box; worstP = p; }
+              }
+            }
+            if (!worst) return true; // clear of every settled item
+            if (worstP.ox < worstP.oy) {           // escape along axis of least penetration
+              const dir = cx(cur) >= cx(worst) ? 1 : -1;
+              cur.x += dir * (worstP.ox + 0.5);
+            } else {
+              const dir = cy(cur) >= cy(worst) ? 1 : -1;
+              cur.y += dir * (worstP.oy + 0.5);
+            }
+          }
+          // cap hit (pathological/dense cluster) — park just beyond the
+          // settled bounding-box bottom-right corner: always clear, always
+          // terminates. Container refit + viewBox framing still picks it up.
+          const maxR = Math.max(...settled.map(R)), maxB = Math.max(...settled.map(B));
+          cur.x = maxR + gap + 10;
+          cur.y = maxB + gap + 10;
+          return false;
+        }
+        function resolveBlocksBFS() {
+          const ns = tab.blocks;
+          if (ns.length < 2) return;
+          const order = bfsOrderFromTopLeft(ns);
+          const settled = [{ x: order[0].x, y: order[0].y, w: order[0].w, h: order[0].h }]; // anchor pinned
+          for (let i = 1; i < order.length; i++) {
+            const cur = order[i];
+            pushClear(cur, settled, GAP.block);
+            settled.push({ x: cur.x, y: cur.y, w: cur.w, h: cur.h });
           }
         }
 
@@ -576,6 +629,41 @@
           if (side === "above") return { x: cx(s) - w / 2, y: T(s) - h - 6, w, h };
           if (side === "left")  return { x: L(s) - w - 6,   y: cy(s) - h / 2, w, h };
           /* top (inside, top-left) */ return { x: L(s) + 8, y: T(s) + 6, w, h };
+        }
+
+        // --- titles as first-class obstacles -------------------------------
+        // Runs after fitContainers() (container geometry final). Containers
+        // are visited top-left first (same philosophy as the block BFS); for
+        // each, pick whichever side (above|left|top) has the LEAST overlap
+        // against every settled block plus every title already placed this
+        // pass. A title that still conflicts after the best-side pick feeds
+        // the outer convergence loop, which nudges the offending block.
+        function placeTitles() {
+          if (!tab.containers.length) return;
+          const sides = ["above", "left", "top"];
+          const blockBoxes = tab.blocks.map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h }));
+          const ordered = tab.containers.slice().sort((a, b) => (cy(a) - cy(b)) || (cx(a) - cx(b)));
+          const placed = [];
+          ordered.forEach((s) => {
+            let bestSide = (s.title && s.title.side) || "above", bestScore = Infinity;
+            for (const side of sides) {
+              const tb = titleBox({ ...s, title: { side } });
+              let score = 0;
+              for (const b of blockBoxes) {
+                const p = penetration(tb, b, GAP.mixed);
+                if (p.ox > 0 && p.oy > 0) score += p.ox * p.oy;
+              }
+              for (const t of placed) {
+                const p = penetration(tb, t, GAP.title);
+                if (p.ox > 0 && p.oy > 0) score += p.ox * p.oy;
+              }
+              if (score < bestScore) { bestScore = score; bestSide = side; }
+              if (bestScore === 0) break;
+            }
+            s.title = s.title || {};
+            s.title.side = bestSide;
+            placed.push(titleBox(s));
+          });
         }
 
         // --- edge-label placement (runs on DOM after render) --------------
@@ -629,9 +717,42 @@
           return report;
         }
 
+        // --- outer-loop repair: push the BLOCK side of a residual conflict -
+        // Called by the render layer between audit() passes (see drawTab's
+        // convergence loop). Labels/titles that couldn't clear by sliding
+        // (decision: "labels are first-class obstacles") get to push a block
+        // instead. For each residual overlap conflict touching a block, pin
+        // everything else and move that block the minimum distance to clear
+        // the other side (its registered current box — DOM-accurate, since
+        // this runs after render). Conflicts between two non-block items
+        // (label×label, title×title) are left to placeLabels/placeTitles,
+        // which already resolve those categories to guaranteed-clear.
+        function nudgeBlocksForConflicts(report) {
+          const idParts = (s) => { const i = s.indexOf(":"); return [s.slice(0, i), s.slice(i + 1)]; };
+          const findBox = (kind, id) => {
+            const e = reg[kind] && reg[kind].find((x) => x.id === id);
+            return e ? e.get() : null;
+          };
+          let nudgedAny = false;
+          for (const c of report.conflicts) {
+            if (c.type !== "overlap") continue;
+            const [ka, ida] = idParts(c.a), [kb, idb] = idParts(c.b);
+            let blockId, otherKind, otherId;
+            if (ka === "block") { blockId = ida; otherKind = kb; otherId = idb; }
+            else if (kb === "block") { blockId = idb; otherKind = ka; otherId = ida; }
+            else continue; // neither side is a block — not ours to fix here
+            const block = tab.blocks.find((b) => b.id === blockId);
+            const otherBox = findBox(otherKind, otherId);
+            if (!block || !otherBox) continue;
+            pushClear(block, [otherBox], gapFor("block", otherKind));
+            nudgedAny = true;
+          }
+          return nudgedAny;
+        }
+
         // --- orchestration ------------------------------------------------
         // Call the data-coord resolvers BEFORE render; resolveLabels AFTER.
-        function run() { resolveBlocks(); fitContainers(); }
+        function run() { resolveBlocksBFS(); fitContainers(); placeTitles(); }
 
         return {
           // primitives (exposed for custom layouts / tests)
@@ -639,7 +760,8 @@
           // policy + registry
           POLICY: { GAP, isConflict, gapFor }, register, clear, reg,
           // resolvers + audit
-          resolveBlocks, fitContainers, resolveLabels, audit, run,
+          resolveBlocksBFS, pushClear, placeTitles, fitContainers, resolveLabels,
+          nudgeBlocksForConflicts, audit, run,
         };
       }
 
@@ -1198,12 +1320,56 @@
         const q = bezierAt(p1, c, p2, t), n = curveNormal(p1, c, p2, t);
         return { x: q.x + n.x * off - w / 2, y: q.y + n.y * off - LABEL_H / 2, w, h: LABEL_H };
       }
-      // Place each label at the clearest spot, searching first ALONG its curve
-      // (slide the anchor point) and then a small perpendicular nudge OFF the
-      // curve so it can escape a block the line passes through while staying
-      // visually attached. Iterates so labels react to each other.
+      // Guaranteed-clear settle pass: place each label at the clearest spot,
+      // searching first ALONG its curve (slide the anchor point) and then a
+      // small perpendicular nudge OFF the curve so it can escape a block the
+      // line passes through while staying visually attached.
+      //
+      // Labels settle ONE AT A TIME in top-left BFS order (same pin-settled
+      // philosophy as the block resolver): each settled label becomes a
+      // fixed obstacle for the next, instead of the old approach where every
+      // label re-negotiated against every other label's CURRENT (possibly
+      // still-moving) box across a fixed 3-pass budget. If the base
+      // candidate set can't find a fully-clear (score-0) spot, the search
+      // EXPANDS — more t-samples along the curve, larger perpendicular
+      // offsets — before giving up. A label that still can't clear anything
+      // is left at its best-effort spot; audit() (run by the outer
+      // convergence loop) will flag the residual label×block/title overlap,
+      // and nudgeBlocksForConflicts() pushes the block to make room — labels
+      // are first-class obstacles that may displace blocks, per spec.
       const T_CANDIDATES = [0.5, 0.4, 0.6, 0.32, 0.68, 0.25, 0.75];
       const N_OFFSETS = [0, 13, -13, 24, -24];
+      const T_EXPANDED = [0.15, 0.85, 0.1, 0.9, 0.05, 0.95, 0, 1];
+      const N_OFFSETS_EXPANDED = [34, -34, 44, -44, 54, -54, 64, -64];
+      // Search the candidate set for the clearest (lowest-score) box for ONE
+      // label against `obstacles`. Base tier (T_CANDIDATES × N_OFFSETS) first;
+      // only if nothing there is fully clear does it expand to the wider
+      // tier (T_EXPANDED / N_OFFSETS_EXPANDED). Same candidate order and
+      // score-0 early-exit as the original inline search — extracted so
+      // placeLabels() itself stays flat (single-purpose per-label search
+      // lives here instead of nested 4-deep inside the settle loop).
+      function bestClearBox(tab, rec, obstacles) {
+        const { p1, c, p2 } = rec._curve;
+        const short = Math.hypot(p2.x - p1.x, p2.y - p1.y) < rec.labelW * 0.8;
+        const tTiers = short ? [[0.5]] : [T_CANDIDATES, T_CANDIDATES.concat(T_EXPANDED)];
+        const oTiers = [N_OFFSETS, N_OFFSETS.concat(N_OFFSETS_EXPANDED)];
+        let best = rec._box, bestScore = Infinity;
+        search:
+        for (const ts of tTiers) {
+          for (const offs of oTiers) {
+            for (const t of ts) {
+              for (const off of offs) {
+                const box = labelBoxAtOff(p1, c, p2, t, off, rec.labelW);
+                // prefer the centre of the line and the line itself (small bias)
+                const sc = labelScore(tab, box, obstacles) + Math.abs(t - 0.5) * 0.01 + Math.abs(off) * 0.02;
+                if (sc < bestScore) { bestScore = sc; best = box; }
+              }
+              if (bestScore === 0) break search;
+            }
+          }
+        }
+        return best;
+      }
       function placeLabels(tab) {
         const labeled = tab.edges
           .map((edge, idx) => ({ edge, idx, rec: tab.state.edgeEls[idx] }))
@@ -1215,34 +1381,23 @@
           ...tab.layout.reg.title.map((e) => e.get()),
         ].filter(Boolean);
 
-        // seed each label on its curve midpoint (t = 0.5, no offset)
+        // seed each label on its curve midpoint (t = 0.5, no offset) — the
+        // seed position also drives the top-left settle order below.
         labeled.forEach(({ edge, rec }) => {
           const { p1, c, p2 } = edgeCurve(tab, edge);
           rec._curve = { p1, c, p2 };
           rec._box = labelBoxAt(p1, c, p2, 0.5, rec.labelW);
         });
 
-        for (let pass = 0; pass < 3; pass++) {
-          labeled.forEach(({ rec }, k) => {
-            const { p1, c, p2 } = rec._curve;
-            const short = Math.hypot(p2.x - p1.x, p2.y - p1.y) < rec.labelW * 0.8;
-            const others = labeled.filter((_, j) => j !== k).map((o) => o.rec._box);
-            const obstacles = statics.concat(others);
-            let best = rec._box, bestScore = Infinity;
-            // a short chord can't slide; only let it nudge perpendicular
-            const ts = short ? [0.5] : T_CANDIDATES;
-            for (const t of ts) {
-              for (const off of N_OFFSETS) {
-                const box = labelBoxAtOff(p1, c, p2, t, off, rec.labelW);
-                // prefer the centre of the line and the line itself (small bias)
-                const sc = labelScore(tab, box, obstacles) + Math.abs(t - 0.5) * 0.01 + Math.abs(off) * 0.02;
-                if (sc < bestScore) { bestScore = sc; best = box; }
-              }
-              if (bestScore === 0) break;
-            }
-            rec._box = best;
-          });
-        }
+        const order = labeled.slice().sort((a, b) =>
+          (a.rec._box.y - b.rec._box.y) || (a.rec._box.x - b.rec._box.x));
+
+        const settled = []; // boxes of labels already placed this pass (fixed obstacles)
+        order.forEach(({ rec }) => {
+          const best = bestClearBox(tab, rec, statics.concat(settled));
+          rec._box = best;
+          settled.push(best);
+        });
 
         labeled.forEach(({ rec }) => {
           setLabelBox(rec, rec._box);
@@ -1450,31 +1605,56 @@
       // (Re)draw a tab's SVG from its CURRENT data. Re-runs the layout
       // resolvers first, so calling it again after nodes were dragged retidies
       // the diagram — this is what the auto-fix uses.
+      // Bounded outer-loop pass count: a label/title pushing a block changes
+      // curve geometry (ports move), so after the first placeLabels() we
+      // re-check with audit() and, if conflicts remain, nudge the offending
+      // block(s) and redo resolve→fit→title→render→label. Hard cap
+      // guarantees termination; the caller's own audit() call is the final
+      // proof (or reports the rare residual instead of looping forever).
+      const OUTER_MAX_PASSES = 4;
       function drawTab(tab, { refit = true } = {}) {
         if (tab.type === "sequence") { drawSequenceTab(tab, { refit }); return; }
         const svg = tab.svg;
-        while (svg.firstChild) svg.removeChild(svg.firstChild);
-        tab.layout.clear();
-        tab.state.nodeEls = {}; tab.state.edgeEls = [];
+
+        function renderPass() {
+          while (svg.firstChild) svg.removeChild(svg.firstChild);
+          tab.layout.clear();
+          tab.state.nodeEls = {}; tab.state.edgeEls = [];
+          // draw — containers (back) → edges → blocks (front)
+          mkDefs(svg, tab.id);
+          const bgG = svgEl("g"), edgeG = svgEl("g"), nodeG = svgEl("g");
+          svg.appendChild(bgG); svg.appendChild(edgeG); svg.appendChild(nodeG);
+          tab.containers.forEach((s) => bgG.appendChild(renderContainer(tab, s)));
+          tab.edges.forEach((e, i) => edgeG.appendChild(renderEdge(tab, e, i)));
+          tab.blocks.forEach((b) => nodeG.appendChild(renderBlock(tab, b)));
+        }
 
         // 1) resolve geometry on the DATA before drawing
-        tab.layout.run();                // push blocks apart + grow containers
+        tab.layout.run();                // BFS-settle blocks + grow containers + place titles
 
-        // 2) draw — containers (back) → edges → blocks (front)
-        mkDefs(svg, tab.id);
-        const bgG = svgEl("g"), edgeG = svgEl("g"), nodeG = svgEl("g");
-        svg.appendChild(bgG); svg.appendChild(edgeG); svg.appendChild(nodeG);
-        tab.containers.forEach((s) => bgG.appendChild(renderContainer(tab, s)));
-        tab.edges.forEach((e, i) => edgeG.appendChild(renderEdge(tab, e, i)));
-        tab.blocks.forEach((b) => nodeG.appendChild(renderBlock(tab, b)));
+        // 2) draw
+        renderPass();
 
-        // 3) de-overlap edge labels on the DOM
+        // 3) de-overlap edge labels on the DOM (guaranteed-clear settle pass)
         tab.layout.resolveLabels();
 
-        // 4) frame (initial build) or keep the current zoom/pan (auto-fix)
+        // 4) outer convergence loop — labels/titles that had to push a block
+        // change edge geometry, so re-resolve + redraw + re-place labels and
+        // re-check. Bounded; final audit() (called by the caller) is proof.
+        for (let pass = 0; pass < OUTER_MAX_PASSES; pass++) {
+          const report = tab.layout.audit({ log: false });
+          if (report.ok) break;
+          const nudged = tab.layout.nudgeBlocksForConflicts(report);
+          if (!nudged) break; // nothing left that a block-push can fix
+          tab.layout.run();
+          renderPass();
+          tab.layout.resolveLabels();
+        }
+
+        // 5) frame (initial build) or keep the current zoom/pan (auto-fix)
         if (refit || !tab.state.vb) fit(tab); else applyViewBox(tab);
 
-        // 5) restore a pinned highlight if one was active
+        // 6) restore a pinned highlight if one was active
         if (tab.state.pinned) highlight(tab, tab.state.pinned);
       }
 

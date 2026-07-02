@@ -611,13 +611,37 @@
         },
 
         "provider-bar"(sec, ctx) {
-          const bH = sec.barH || 108;
           const x = ctx.x,
             y = ctx.y,
             w = ctx.w;
           const brand = sec.brand || {};
           const bcol = brand.col || "#f5811f";
           const A = ctx.audit;
+          const items = sec.items || [];
+          const cw = sec.chipW || 162;
+          const chipH = 52;
+          const rowGap = sec.chipRowGap || 14;
+          const aStart = x + (sec.chipsStart || 440),
+            aEnd = x + w - 26,
+            avail = Math.max(cw, aEnd - aStart);
+          // repack lever (top-left order): keep every chip at its authored
+          // width and wrap onto additional rows instead of letting the slot
+          // shrink narrower than the chip — the deterministic analogue of
+          // "push the closest item" for a fixed-geometry poster. Dense
+          // provider lists grow the bar downward (row pitch), never
+          // overlapping, regardless of item count or width. When everything
+          // fits in one row (rows === 1, the pre-repack case) `bH` is exactly
+          // `sec.barH || 108` — same as the single-row formula this
+          // replaces, including a custom barH smaller than 108. Only when a
+          // repack actually happens (rows > 1) does bH grow to fit the chip
+          // stack, since that's the only case where the old fixed bH could
+          // let rows overlap.
+          const cols = Math.max(1, Math.min(items.length || 1, Math.floor(avail / cw)));
+          const rows = Math.max(1, Math.ceil((items.length || 1) / cols));
+          const stackH = rows * chipH + (rows - 1) * rowGap;
+          const bH = rows > 1 ? Math.max(sec.barH || 108, stackH + 56) : (sec.barH || 108);
+          const rowsTop = y + bH / 2 - stackH / 2;
+
           let svg = `<rect x="${x}" y="${y}" width="${w}" height="${bH}" rx="20" fill="url(#bar)" stroke="#ffd9bd" stroke-width="1.4"/>`;
           svg += glassTile(x + 28, y + bH / 2 - 24, 48, 14, bcol);
           svg += icon(brand.ic || "sparkles", x + 52, y + bH / 2, 16, brand.iconCol || "#ef7a25", 2.0);
@@ -634,11 +658,6 @@
               fill: brand.subCol || "#a06a35",
               anchor: "start",
             });
-          const items = sec.items || [];
-          const cw = sec.chipW || 162;
-          const aStart = x + (sec.chipsStart || 440),
-            aEnd = x + w - 26,
-            slot = (aEnd - aStart) / (items.length || 1);
           // audit: brand caption must not run into the chip area
           if (A) {
             fitText(A, brand.h, x + 94, y + bH / 2 - 7, "start", 21, 800, false,
@@ -647,13 +666,17 @@
               x + 94, aStart - cw / 2 - (x + 94), "供應商品牌");
           }
           items.forEach((p, i) => {
-            const ccx = aStart + slot * (i + 0.5),
+            const row = Math.floor(i / cols),
+              col = i % cols,
+              itemsInRow = Math.min(cols, items.length - row * cols),
+              rowSlot = avail / itemsInRow;
+            const ccx = aStart + rowSlot * (col + 0.5),
               cx0 = ccx - cw / 2,
-              cy0 = y + bH / 2 - 26;
+              cy0 = rowsTop + row * (chipH + rowGap);
             // audit: chips must not overlap; chip name must fit the chip
             if (A) {
               const cnm = `供應商晶片 ${i + 1}`;
-              A.box(p.name || cnm, "provider-bar 晶片", cx0, cy0, cw, 52);
+              A.box(p.name || cnm, "provider-bar 晶片", cx0, cy0, cw, chipH);
               if (!p.more)
                 fitText(A, p.name, cx0 + 56, cy0 + 33, "start", 18, 800, false,
                   cx0 + 56, cw - 56 - 10, cnm);
