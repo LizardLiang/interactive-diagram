@@ -374,6 +374,11 @@
           // `messages` (ordered events, top→bottom). A message is a cross arrow
           // when from!==to, or a self-loop when from===to. `style` drives the
           // stroke/marker; `type` on an actor drives its color from TYPE.
+          // A message may also carry `activate: true` (opens an activation bar
+          // on the receiver, `to`) and/or `deactivate: true` (closes the bar on
+          // the sender, `from`). Flags are explicit — no auto-inference.
+          // Re-entrant activations on the same actor merge into one continuous
+          // bar; an activation left open at the end runs to the bottom actor box.
           {
             id: "seq-demo",
             label: "Sequence",
@@ -385,13 +390,15 @@
             ],
             messages: [
               { from: "a", to: "b", style: "sync",     label: "① Request to B",
-                description: "Dummy step 1.", tech: ["dummy"], responsibilities: ["dummy"] },
+                description: "Dummy step 1.", tech: ["dummy"], responsibilities: ["dummy"],
+                activate: true },
               { from: "b", to: "b", style: "internal", label: "② B internal work",
                 description: "Dummy self-step on B.", tech: ["dummy"], responsibilities: ["dummy"] },
               { from: "b", to: "b", style: "internal", label: "③ B second internal step",
                 description: "Dummy self-step.", tech: ["dummy"], responsibilities: ["dummy"] },
               { from: "b", to: "a", style: "stream",   label: "④ Result back to A",
-                description: "Dummy result to A.", tech: ["dummy"], responsibilities: ["dummy"] },
+                description: "Dummy result to A.", tech: ["dummy"], responsibilities: ["dummy"],
+                deactivate: true },
               { from: "a", to: "a", style: "internal", label: "⑤ A reviews internally",
                 description: "Dummy self-step on A.", tech: ["dummy"], responsibilities: ["dummy"] },
               { from: "a", to: "b", style: "sync",     label: "⑥ A confirms to B",
@@ -976,6 +983,7 @@
         stepSelf: 82,   // vertical advance after a self message
         loopW: 50, loopH: 34,
         labelFS: 18, labelH: 30,
+        barW: 10,       // activation-bar thickness (centered on the lifeline x)
       };
 
       function drawSequenceTab(tab, { refit = true } = {}) {
@@ -1000,9 +1008,25 @@
         const bottomBoxY = y - 18;
         const lifelineBot = bottomBoxY;
 
+        // activation bars: explicit activate/deactivate flags, merged by depth
+        const depth = {}, barStart = {}, bars = [];
+        tab.messages.forEach((m) => {
+          if (m.activate) {            // receiver becomes active
+            depth[m.to] = (depth[m.to] || 0) + 1;
+            if (depth[m.to] === 1) barStart[m.to] = m._y;
+          }
+          if (m.deactivate) {         // sender finishes
+            depth[m.from] = Math.max(0, (depth[m.from] || 0) - 1);
+            if (depth[m.from] === 0) bars.push({ actor: m.from, y0: barStart[m.from], y1: m._y });
+          }
+        });
+        Object.keys(depth).forEach((id) => {   // unbalanced → run to bottom box
+          if (depth[id] > 0) bars.push({ actor: id, y0: barStart[id], y1: bottomBoxY });
+        });
+
         mkDefs(svg, tab.id);
-        const lifeG = svgEl("g"), msgG = svgEl("g"), actorG = svgEl("g");
-        svg.appendChild(lifeG); svg.appendChild(msgG); svg.appendChild(actorG);
+        const lifeG = svgEl("g"), barG = svgEl("g"), msgG = svgEl("g"), actorG = svgEl("g");
+        svg.appendChild(lifeG); svg.appendChild(barG); svg.appendChild(msgG); svg.appendChild(actorG);
 
         // --- lifelines + top/bottom actor boxes (UML style) ---------------
         tab.actors.forEach((a, i) => {
@@ -1022,6 +1046,17 @@
             });
             t.textContent = a.label; actorG.appendChild(t);
           });
+        });
+
+        // --- activation bars (UML execution occurrences) -------------------
+        bars.forEach((b) => {
+          const i = idxOf[b.actor]; if (i == null) return;
+          if (b.y1 - b.y0 <= 0) return; // zero/negative-height bar (e.g. self-msg with activate+deactivate) — nothing to draw
+          const col = TYPE[tab.actors[i].type] || TYPE.worker;
+          barG.appendChild(svgEl("rect", {
+            x: cx(i) - S.barW / 2, y: b.y0, width: S.barW, height: b.y1 - b.y0,
+            rx: 2, fill: col.fill, stroke: col.stroke, "stroke-width": "1.5",
+          }));
         });
 
         // --- messages ------------------------------------------------------
@@ -1554,6 +1589,8 @@
           const actors = tab.actors.map((a) =>
             `<div class="legend-item"><div class="legend-dot" style="background:${(TYPE[a.type] || TYPE.worker).stroke}"></div>${a.label}</div>`
           ).join("");
+          const barSwatch = `<svg width="22" height="12" style="flex-shrink:0"><rect x="8" y="1" width="6" height="10" rx="2" fill="${TYPE.worker.fill}" stroke="${TYPE.worker.stroke}" stroke-width="1.5"/></svg>`;
+          const activation = `<div class="legend-item">${barSwatch}作用中 (activation)</div>`;
           const sub = `font-size:10px;font-weight:600;color:var(--fg-muted);text-transform:uppercase;letter-spacing:.05em;margin:8px 0 5px`;
           const styles = [["sync", false, false], ["stream", false, false], ["return", true, false], ["internal", false, true]]
             .map(([k, dashed, loop]) => {
@@ -1561,7 +1598,7 @@
               const dash = dashed ? "5 4" : "";
               return `<div class="legend-item">${swatch(color, dash, loop)}${MSG_STYLE_LABELS[k]}</div>`;
             }).join("");
-          box.innerHTML = `<div style="${sub};margin-top:0">生命線</div>${actors}<div style="${sub}">箭頭樣式</div>${styles}`;
+          box.innerHTML = `<div style="${sub};margin-top:0">生命線</div>${actors}${activation}<div style="${sub}">箭頭樣式</div>${styles}`;
           return;
         }
         title.textContent = "節點類型";

@@ -150,6 +150,20 @@ const app = {
         { from, to, label, style, bendDir },
         // style: "sync" | "async" | "dashed"; bendDir: 1 | -1 to bow parallel edges apart
       ],
+
+      // For type: "sequence" tabs, use `actors` + `messages` instead of
+      // containers/blocks/edges:
+      actors: [
+        { id, label, type },               // vertical lifelines, left→right in array order
+      ],
+      messages: [
+        { from, to, label, style, description, tech, responsibilities, activate, deactivate },
+        // from === to → self-loop; from !== to → cross arrow
+        // activate: true opens an activation bar on the receiver (`to`)
+        // deactivate: true closes the activation bar on the sender (`from`)
+        // flags are explicit (no auto-inference); re-entrant activations on the
+        // same actor merge into one bar; an unclosed bar runs to the bottom box
+      ],
     },
     // …add more tabs for additional views; the tab strip appears automatically
   ],
@@ -182,6 +196,8 @@ The skeleton handles geometry; you handle meaning. Two things are yours to get r
 - **Node `type` and content.** `type` drives color, so pick the one that reflects each node's role (client / http / worker / infra / queue / db / external). Fill `description`, `tech`, and `responsibilities` — an empty panel is a dead click.
 
 Pick the diagram `type` from what's being described: `system` for services and data stores, `sequence` for time-ordered messages between actors, `flow` for decision/process flows. If the request is ambiguous — missing components, unclear flow direction, unclear sync vs async — ask before inventing components.
+
+For `sequence` tabs, mark `activate`/`deactivate` on messages where an actor is doing active work — the renderer draws a UML-style activation bar on that actor's lifeline spanning the marked rows.
 
 ## Before you hand it over
 
