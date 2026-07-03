@@ -1,6 +1,21 @@
 # Interactive Diagram
 
+> **One prompt → an emailable HTML file you can pan, zoom, and click through.** Architecture, sequence, or a slide-ready poster — no screenshots to keep re-taking, no diagramming app to learn.
+
+![pure HTML/CSS/JS](https://img.shields.io/badge/pure-HTML%20%2F%20CSS%20%2F%20vanilla%20JS-3b6fe0) ![no build step](https://img.shields.io/badge/build%20step-none-2ea043) ![no CDN](https://img.shields.io/badge/CDN-none-2ea043) ![license MIT](https://img.shields.io/badge/license-MIT-555)
+
+Works with any agent that reads Skills — **Claude Code, Cursor, OpenCode, Gemini CLI**, and others — via the `skills` CLI or as a Claude Code plugin.
+
 A Claude [skill](https://code.claude.com/docs/en/skills) / [plugin](https://code.claude.com/docs/en/plugins) that turns a description of a system into a **beautiful, interactive diagram** — delivered as a single self-contained `.html` file you open by double-clicking. No frameworks, no build step, no server, no CDN.
+
+## When to use it — and when not
+
+| Reach for this skill when… | Reach for something else when… |
+| --- | --- |
+| You want a diagram you can **pan / zoom / drag / click-through**, not a static picture | You just need a quick static box-and-arrow sketch inline in a doc → **Mermaid** renders in GitHub/Notion with zero install |
+| You want to **hand someone one `.html` file** (email, Slack, attach) that works offline with no build/server | You want to **hand-draw / freely edit** on a canvas → **Excalidraw** or **draw.io** |
+| You want a **slide-ready platform poster** exported to PNG/SVG for a deck | You need a diagram embedded in a **live app UI** with your own framework — take the config idea, not this file |
+| You want **architecture + sequence + flow** views in one shareable file | You're standardizing on a **diagram-as-code language/CLI** in CI → **D2** |
 
 System architecture, sequence, and flow diagrams that you can **pan, zoom, drag, and explore** — with a baked-in layout guard that keeps everything from overlapping. The agent never hand-writes a renderer: it edits **one config object** in a ready-made skeleton, and the runtime does the rest.
 
