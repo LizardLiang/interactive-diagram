@@ -900,10 +900,23 @@
       }
       // Persist a successful auto-fix (option C): a local HTML page can't
       // rewrite its own source file, so instead we serialize the current page
-      // and append a tiny override <script> before </body> that re-applies the
-      // resolved width + SCALE and re-renders on load. Reopening the downloaded
-      // file shows the fixed layout permanently — the original config is left
-      // intact, just overridden after it runs.
+      // and append a tiny override script element just before the closing
+      // body tag; it re-applies the resolved width + SCALE and re-renders on
+      // load. Reopening the downloaded file shows the fixed layout
+      // permanently — the original config is left intact, just overridden
+      // after it runs.
+      //
+      // NOTE (deliberate string-splitting below): this script's own source
+      // must never contain a literal closing-body or opening/closing-script
+      // tag sequence outside the real ones. Naive HTML post-processors
+      // (live-preview reload injectors, this very function) splice at the
+      // FIRST such sequence they find — if one hides in a comment or string,
+      // the splice lands inside the script and the rest of the source spills
+      // onto the page as text. So the needles are assembled at runtime and
+      // the injection targets the LAST closing-body tag, not the first.
+      const CLOSE_BODY = "</bo" + "dy>";
+      const SCRIPT_OPEN = "<scr" + "ipt>";
+      const SCRIPT_CLOSE = "</scr" + "ipt>";
       function downloadFixedHTML() {
         clearAuditHL();
         const stage = document.getElementById("stage");
@@ -912,10 +925,9 @@
         let src = "<!doctype html>\n" + document.documentElement.outerHTML;
         stage.innerHTML = saved; // restore the on-screen view
         const override =
-          `\n<script>/* auto-fix baked in */ try { config.meta.width = ${config.meta.width}; SCALE = ${SCALE}; render(); auditLayout(); } catch (e) { console.warn(e); }<\/script>\n`;
-        src = src.includes("</body>")
-          ? src.replace("</body>", override + "</body>")
-          : src + override;
+          `\n${SCRIPT_OPEN}/* auto-fix baked in */ try { config.meta.width = ${config.meta.width}; SCALE = ${SCALE}; render(); auditLayout(); } catch (e) { console.warn(e); }${SCRIPT_CLOSE}\n`;
+        const at = src.lastIndexOf(CLOSE_BODY);
+        src = at >= 0 ? src.slice(0, at) + override + src.slice(at) : src + override;
         dl(new Blob([src], { type: "text/html" }), fileName() + "-fixed.html");
       }
 
