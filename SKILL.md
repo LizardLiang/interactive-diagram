@@ -98,21 +98,33 @@ resolves collisions:
 
 | Category | What it is | Resolver |
 |----------|------------|----------|
-| `block`     | block rectangles / diamonds | `resolveBlocks()` — push-apart loop, ≥40px clearance, axis of least resistance |
-| `label`     | text riding on arrow (edge) lines | `resolveLabels()` — vertical nudge so label boxes never collide |
-| `title`     | container captions | `titleBox()` places each in clear margin outside its container |
-| `container` | rectangles grouping blocks | `fitContainers()` grows each to contain its members + padding |
+| `block`     | block rectangles / diamonds | `resolveBlocks()` — BFS pin-settled push-apart **within each zone**, ≥40px clearance |
+| `label`     | text riding on arrow (edge) lines | `resolveLabels()` — slides each label along its own curve to a spot the audit accepts |
+| `title`     | container captions | `titleBox()` places each in the reserved caption strip of its own zone |
+| `container` | **zones** grouping blocks | `packUnits()` — zones (and free blocks) pack as rigid units from the **top-left corner**, never overlapping |
+
+The resolver is **two-level**: blocks settle inside their zone first, then whole
+zones — plus every free block — pack as rigid units with ≥48px zone-to-zone
+clearance, and the finished layout is normalized so its bounding box starts at
+the top-left origin `(60, 60)`. Containers are **optional**: omit the
+`containers` array (or leave a block's `container` unset) and those blocks pack
+as standalone units alongside the zones. A block naming an unknown container id
+logs a `console.warn` and is treated as free.
 
 Two entry points (on each tab's `layout`):
 
-- **`layout.run()`** — call on the *data* before rendering: pushes blocks apart,
-  then grows containers around them. (`buildTab()` already does this.)
+- **`layout.run()`** — call on the *data* before rendering: settles blocks
+  inside each zone, packs zones from the top-left, then grows containers around
+  their members. (`buildTab()` already does this.)
 - **`layout.audit()`** — walks every conflicting category pair and returns
   `{ ok, count, conflicts[] }`, logging a `console.table` tagged with the tab id.
-  **Containment is not a conflict**: a block inside its container, a title
-  captioning its container, and bands crossing lanes are all by design (see
-  `POLICY.isConflict`). Blocks that spill *outside* their declared container are
-  reported separately.
+  **Zones must not overlap**: container×container overlap is a `zone-overlap`
+  conflict and a block sitting on a foreign zone is a `foreign-block` conflict.
+  The one sanctioned crossing is **band×lane** (a grid cell *is* the crossing
+  region), which also exempts the crossing band's blocks and title against that
+  lane (see `POLICY.isConflict`). A block inside its *own* container and a title
+  captioning its *own* container are by design. Blocks that spill *outside*
+  their declared container are reported separately as `spill`.
 
 `layout.resolveLabels()` runs on the DOM after render (labels need measured
 positions); everything else runs on the in-memory tab data. Geometry primitives
@@ -134,15 +146,18 @@ const app = {
       label: "System",                    // caption shown in the tab strip
       type: "system" | "sequence" | "flow",
 
-      containers: [                        // the grouping rectangles
+      containers: [                        // OPTIONAL — the zone rectangles
         { id, label, orient, color, title },
+        // a container is a ZONE grouping the blocks of one layer / system /
+        // module; zones never overlap each other (band×lane crossing excepted)
         // orient: "band" (horizontal stripe) | "lane" (vertical column) | "box" (free)
         // title.side: "above" | "left" | "top"
       ],
 
       blocks: [                            // the nodes
         { id, container, label, type, x, y, w, h, description, tech, responsibilities },
-        // container = id of the container this block belongs to
+        // container = id of the zone this block belongs to; omit it (or omit
+        // `containers` entirely) and the block packs as a FREE unit
         // type drives the color (client / http / worker / infra / queue / db / external)
       ],
 
@@ -192,7 +207,7 @@ The diagram renders as **inline SVG** (interactive, scalable, exportable — not
 
 The skeleton handles geometry; you handle meaning. Two things are yours to get right:
 
-- **Container membership and starting hints.** Every block names a `container`, and `x/y/w/h` are *hints*, not final coordinates — `layout.run()` pushes blocks apart and grows containers around them. Group blocks the way the system actually decomposes (by tier, lane, or stage) so the auto-layout has a sensible starting shape to refine.
+- **Container membership and starting hints.** A container is a **zone** — an area grouping the blocks of one layer / system / module — and it is **optional**: blocks without a `container` (or a tab with no `containers` at all) pack as free units alongside the zones. `x/y/w/h` are *hints*, not final coordinates — `layout.run()` settles blocks inside their zone, packs zones from the top-left corner so nothing overlaps, and grows containers around their members. Group blocks the way the system actually decomposes (by tier, lane, or stage) so the auto-layout has a sensible starting shape to refine.
 - **Node `type` and content.** `type` drives color, so pick the one that reflects each node's role (client / http / worker / infra / queue / db / external). Fill `description`, `tech`, and `responsibilities` — an empty panel is a dead click.
 
 Pick the diagram `type` from what's being described: `system` for services and data stores, `sequence` for time-ordered messages between actors, `flow` for decision/process flows. If the request is ambiguous — missing components, unclear flow direction, unclear sync vs async — ask before inventing components.

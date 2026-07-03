@@ -66,7 +66,7 @@ Once installed, just ask your agent to "draw a diagram of …" / "visualize this
 - **One file, zero dependencies** — pure HTML + CSS + vanilla JS. Open it in any browser; share it as a single attachment.
 - **Multiple diagram types** — `type: "system"` (containers + blocks + edges) for architecture/flow views, and `type: "sequence"` (actors + messages) for UML lifeline diagrams. Tabs can mix types freely.
 - **Tabbed multi-view** — one file can hold several related diagrams (e.g. *Architecture*, *Agent loop*, *Request flow*), switchable from a floating toolbar. A single-view file hides the tab strip.
-- **Layout guard** — a per-tab engine that resolves overlap across four element categories (blocks, edge labels, container titles, container rectangles) and can **audit** the result. Found overlaps can be **auto-fixed** with one click.
+- **Layout guard** — a per-tab engine that resolves overlap across four element categories (blocks, edge labels, container titles, container rectangles) and can **audit** the result. Found overlaps can be **auto-fixed** with one click. The resolver is **zone-aware**: containers act as non-overlapping zones (one layer / system / module each), blocks settle inside their zone, and zones — plus any **free blocks** (containers are optional) — pack deterministically from the **top-left corner**. Band×lane grid crossings remain supported.
 - **Rich interactions**
   - **Hover** a node → highlights its entire connected **chain** (upstream + downstream), dims the rest.
   - **Double-click** a node → **pins** the chain highlight; double-click again to unpin.

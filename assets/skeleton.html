@@ -18,8 +18,10 @@
 
           TAB        — a whole diagram / view. Each tab is a DOM tab in the
                        floating bar and owns its own <svg> + layout-guard instance.
-          CONTAINER  — the rectangles that group blocks (band / lane / box).
-          BLOCK      — a node: one rounded rect (or diamond) living in a container.
+          CONTAINER  — a ZONE: a rectangle grouping the blocks of one layer /
+                       system / module (band / lane / box). OPTIONAL — a tab may
+                       omit containers entirely, or mix zoned and free blocks.
+          BLOCK      — a node: one rounded rect (or diamond), inside a zone or free.
 
       The headline feature lives in the "LAYOUT GUARD" section: makeLayout(tab)
       builds a per-tab guard that audits and resolves overlap across the FOUR
@@ -28,12 +30,15 @@
           1. BLOCK     — node rectangles / diamonds
           2. LABEL     — text that rides on the arrow (edge) lines
           3. TITLE     — container captions
-          4. CONTAINER — the rectangles grouping blocks
+          4. CONTAINER — the zone rectangles grouping blocks
 
-      layout.run() resolves collisions; layout.audit() proves none remain and
-      logs a table of any it could not fix. Containment (a block living INSIDE its
-      container, a title belonging to its container, bands crossing lanes) is by
-      design and is NOT reported as a collision — see POLICY.isConflict.
+      layout.run() is a two-level resolver: it settles blocks WITHIN each zone,
+      then packs whole zones (and free blocks) as rigid units from the top-left
+      corner, so zones never overlap each other and no block sits on a foreign
+      zone. layout.audit() proves no conflict remains and logs a table of any it
+      could not fix. Containment (a block living INSIDE its own zone, a title
+      captioning its own zone, a band crossing a lane in a grid) is by design
+      and is NOT reported as a collision — see POLICY.isConflict.
       ============================================================================
     -->
     <style>
@@ -281,13 +286,19 @@
       // a tab strip appears in the floating bar to switch between them.
       //
       // Inside a tab:
-      //   containers[] — the grouping rectangles. orient drives how they grow:
+      //   containers[] — OPTIONAL zone rectangles grouping the blocks of one
+      //                  layer / system / module. Zones never overlap each
+      //                  other. orient drives how they grow:
       //     "band" = full-width horizontal stripe (height fixed, x/width auto)
       //     "lane" = full-height vertical column   (width fixed, y/height auto)
       //     "box"  = free rectangle that hugs its members on all sides
-      //   blocks[]     — the nodes. `container` is the id of the container it
-      //                  belongs to. x/y/w/h are STARTING HINTS; layout.run()
-      //                  finalizes them so nothing in the four categories overlaps.
+      //     (a band may cross a lane — that grid crossing is the one allowed
+      //      container overlap)
+      //   blocks[]     — the nodes. `container` is the id of the zone it
+      //                  belongs to; omit it (or omit containers entirely) and
+      //                  the block packs as a FREE unit alongside the zones.
+      //                  x/y/w/h are STARTING HINTS; layout.run() finalizes
+      //                  them from the top-left corner so nothing overlaps.
       //   edges[]      — connections between blocks.
       const app = {
         title: "圖表",
@@ -491,20 +502,42 @@
 
         // --- minimum clearance (px) between each category pair ------------
         const GAP = {
-          block: 40, // SKILL.md hard rule: ≥40px between blocks
-          label: 4,  // edge labels vs each other
+          block: 40,     // SKILL.md hard rule: ≥40px between blocks
+          label: 4,      // edge labels vs each other
           title: 8,
-          mixed: 8,  // any cross-category pair not listed
+          container: 48, // zone-to-zone clearance (band×lane crossing exempt)
+          mixed: 8,      // any cross-category pair not listed
         };
-        // Conflict POLICY: which category pairs MUST NOT overlap. Containment
-        // is intentional and therefore excluded:
-        //   container×block — a block lives inside its container (allowed)
-        //   container×title — a title captions its container (allowed)
-        //   container×container — bands cross lanes by design (allowed)
-        //   container×label — labels float over the band background (allowed)
-        function isConflict(ka, kb) {
-          if (ka === "container" || kb === "container") return false;
-          return true; // block/label/title pairs all must stay clear
+        // Conflict POLICY: which pairs MUST NOT overlap. Identity-aware —
+        // `a` / `b` are registry entries ({ kind, id }). A container is a
+        // ZONE grouping blocks of one layer / system / module, so:
+        //   container×container — CONFLICT; only band×lane grid crossing is
+        //                         exempt (both spanning orients must cross)
+        //   container×block     — CONFLICT unless the block is a MEMBER of
+        //                         that container, or its own container forms
+        //                         a crossing band×lane pair with it (a grid
+        //                         cell IS the crossing region)
+        //   container×title     — CONFLICT unless the title captions THAT
+        //                         container, or the two containers cross
+        //   container×label     — allowed (labels float over zone backgrounds)
+        const containerOf = (id) => (tab.containers || []).find((s) => s.id === id);
+        const crossingZones = (sa, sb) => !!(sa && sb &&
+          ((sa.orient === "band" && sb.orient === "lane") ||
+           (sa.orient === "lane" && sb.orient === "band")));
+        function isConflict(a, b) {
+          const c = a.kind === "container" ? a : b.kind === "container" ? b : null;
+          if (!c) return true; // block/label/title pairs all must stay clear
+          const o = c === a ? b : a;
+          const zone = containerOf(c.id);
+          if (o.kind === "label") return false;
+          if (o.kind === "container") return !crossingZones(zone, containerOf(o.id));
+          if (o.kind === "block") {
+            const blk = (tab.blocks || []).find((n) => n.id === o.id);
+            if (!blk) return true;
+            if (blk.container === c.id) return false;                       // its own zone
+            return !crossingZones(zone, containerOf(blk.container));        // grid crossing
+          }
+          /* title */ return o.id !== c.id && !crossingZones(zone, containerOf(o.id));
         }
         function gapFor(ka, kb) {
           if (ka === kb && GAP[ka] != null) return GAP[ka];
@@ -587,8 +620,7 @@
           cur.y = maxB + gap + 10;
           return false;
         }
-        function resolveBlocksBFS() {
-          const ns = tab.blocks;
+        function resolveBlocks(ns) {
           if (ns.length < 2) return;
           const order = bfsOrderFromTopLeft(ns);
           const settled = [{ x: order[0].x, y: order[0].y, w: order[0].w, h: order[0].h }]; // anchor pinned
@@ -598,13 +630,164 @@
             settled.push({ x: cur.x, y: cur.y, w: cur.w, h: cur.h });
           }
         }
+        // kept for custom layouts/tests: flat settle over EVERY block. run()
+        // no longer uses this — it settles per zone, then packs zones.
+        function resolveBlocksBFS() { resolveBlocks(tab.blocks || []); }
+
+        // --- ZONE UNITS: two-level layout ----------------------------------
+        // A container is a ZONE grouping blocks of the same layer / system /
+        // module. Level 1: settle blocks WITHIN each zone (resolveBlocks,
+        // hints preserved). Level 2: pack whole zones — plus every free
+        // (containerless) block — as RIGID UNITS with the same pin-settled
+        // guarantee, so zones never overlap each other and no block sits on
+        // a foreign zone. Finally the whole layout is translated so its
+        // bounding box starts at the top-left origin (MARGIN, MARGIN).
+        const MARGIN = 60;   // top-left origin of the packed layout
+        const BIG = 1e6;     // "spans the full axis" stand-in for band/lane packing
+
+        // the zone a block actually belongs to (unknown ids → free block)
+        function zoneOf(block) {
+          return block.container
+            ? (tab.containers || []).find((s) => s.id === block.container) || null
+            : null;
+        }
+        // one unit per zone (with its member blocks) + one per free block.
+        // Declared-but-empty zones still pack (they keep their hint box).
+        function groupUnits() {
+          const units = [];
+          (tab.containers || []).forEach((zone) =>
+            units.push({ zone, members: (tab.blocks || []).filter((b) => zoneOf(b) === zone) }));
+          (tab.blocks || []).forEach((b) => {
+            if (!zoneOf(b)) units.push({ zone: null, members: [b] });
+          });
+          return units;
+        }
+        // rigid bounding box of a unit: members + container pad + the caption
+        // strip, so a zone's title can never collide with a neighboring zone.
+        function unitBox(unit, pad = 28) {
+          const ms = unit.members;
+          let box = null;
+          if (ms.length) {
+            const x0 = Math.min(...ms.map(L)), x1 = Math.max(...ms.map(R));
+            const y0 = Math.min(...ms.map(T)), y1 = Math.max(...ms.map(B));
+            box = unit.zone
+              ? { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 }
+              : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+          } else if (unit.zone) {
+            const z = unit.zone;
+            box = { x: z.x || 0, y: z.y || 0, w: z.w || 160, h: z.h || 100 };
+          }
+          if (box && unit.zone) {
+            box.y -= 28; box.h += 28; // "above" caption strip (placeTitles' first pick)
+            if (unit.zone.title && unit.zone.title.side === "left") {
+              const tw = measureText(unit.zone.label, 11) + 30;
+              box.x -= tw; box.w += tw;
+            }
+          }
+          return box;
+        }
+        // translate a unit rigidly: every member block + the box (and, for an
+        // empty zone, its hint rectangle) move by the same delta.
+        function moveUnit(unit, dx, dy) {
+          unit.members.forEach((b) => { b.x += dx; b.y += dy; });
+          if (unit.zone && !unit.members.length) {
+            unit.zone.x = (unit.zone.x || 0) + dx;
+            unit.zone.y = (unit.zone.y || 0) + dy;
+          }
+          unit.box.x += dx; unit.box.y += dy;
+        }
+        // band units later span the full content width (lanes: full height),
+        // so for packing they are treated as unbounded on that axis — except
+        // against a crossing band×lane pair, which policy allows to overlap.
+        const orientOf = (u) => (u.zone && u.zone.orient) || null;
+        function crossPair(a, b) {
+          const oa = orientOf(a), ob = orientOf(b);
+          return (oa === "band" && ob === "lane") || (oa === "lane" && ob === "band");
+        }
+        function packBox(u, versus) {
+          const b = { x: u.box.x, y: u.box.y, w: u.box.w, h: u.box.h };
+          if (orientOf(u) === "band" && orientOf(versus) !== "lane") {
+            const c = b.x + b.w / 2; b.x = c - BIG / 2; b.w = BIG;
+          }
+          if (orientOf(u) === "lane" && orientOf(versus) !== "band") {
+            const c = b.y + b.h / 2; b.y = c - BIG / 2; b.h = BIG;
+          }
+          return b;
+        }
+        // pushClear at the unit level: move `cur` (rigidly) until clear of
+        // every settled unit. The inflated packBox makes the escape axis fall
+        // out of axis-of-least-penetration automatically — a band conflict is
+        // "infinitely" deep in x, so the escape is always vertical (bands
+        // stack); a lane conflict escapes horizontally (lanes sit side by
+        // side); box/free pairs behave exactly like the block resolver.
+        function pushUnitClear(cur, settledUnits, gap) {
+          const MAX = 200;
+          for (let iter = 0; iter < MAX; iter++) {
+            let worst = null, worstDepth = 0, worstP = null, worstA = null;
+            for (const s of settledUnits) {
+              if (crossPair(cur, s)) continue; // band×lane grid crossing allowed
+              const a = packBox(cur, s), b = packBox(s, cur);
+              const p = penetration(a, b, gap);
+              if (p.ox > 0 && p.oy > 0) {
+                const depth = Math.min(p.ox, p.oy); // area is meaningless on inflated boxes
+                if (depth > worstDepth) { worstDepth = depth; worst = b; worstP = p; worstA = a; }
+              }
+            }
+            if (!worst) return true;
+            if (worstP.ox < worstP.oy) {
+              const dir = cx(worstA) >= cx(worst) ? 1 : -1;
+              moveUnit(cur, dir * (worstP.ox + 0.5), 0);
+            } else {
+              const dir = cy(worstA) >= cy(worst) ? 1 : -1;
+              moveUnit(cur, 0, dir * (worstP.oy + 0.5));
+            }
+          }
+          // cap hit — park below everything settled (always clear, terminates)
+          const maxB = Math.max(...settledUnits.map((s) => B(s.box)));
+          moveUnit(cur, 0, (maxB + gap + 10) - cur.box.y);
+          return false;
+        }
+        // pin-settled packing over units in top-left reading order — the same
+        // guarantee the block resolver gives, lifted one level.
+        function packUnits(units) {
+          const live = units.filter((u) => u.box);
+          if (live.length < 2) return;
+          const remaining = live.slice().sort((a, b) => (cy(a.box) - cy(b.box)) || (cx(a.box) - cx(b.box)));
+          const order = [remaining.shift()]; // anchor unit = top-left, pinned
+          while (remaining.length) {
+            let bestIdx = 0, bestD = Infinity;
+            for (let i = 0; i < remaining.length; i++) {
+              for (const o of order) {
+                const d = (cx(remaining[i].box) - cx(o.box)) ** 2 + (cy(remaining[i].box) - cy(o.box)) ** 2;
+                if (d < bestD) { bestD = d; bestIdx = i; }
+              }
+            }
+            order.push(remaining.splice(bestIdx, 1)[0]);
+          }
+          const settled = [order[0]];
+          for (let i = 1; i < order.length; i++) {
+            pushUnitClear(order[i], settled, GAP.container);
+            settled.push(order[i]);
+          }
+        }
+        // translate the whole layout so its bounding box starts at the
+        // top-left origin (MARGIN, MARGIN) — the deterministic "start from
+        // the top-left corner" contract.
+        function normalizeOrigin(units) {
+          const boxes = units.filter((u) => u.box).map((u) => u.box);
+          if (!boxes.length) return;
+          const dx = MARGIN - Math.min(...boxes.map(L));
+          const dy = MARGIN - Math.min(...boxes.map(T));
+          if (!dx && !dy) return;
+          units.forEach((u) => { if (u.box) moveUnit(u, dx, dy); });
+        }
 
         // --- grow containers to contain their member blocks ---------------
         // band → fixed height, spans full diagram width, y/h hug member rows
         // lane → fixed width,  spans full diagram height, x/w hug member cols
         // box  → hugs members on all four sides
         function fitContainers(pad = 28) {
-          tab.containers.forEach((s) => {
+          (tab.containers || []).forEach((s) => {
             const members = tab.blocks.filter((n) => n.container === s.id);
             if (!members.length) return;
             const minX = Math.min(...members.map(L)), maxX = Math.max(...members.map(R));
@@ -619,7 +802,8 @@
             }
           });
           // bands span the union width of all blocks; lanes span union height.
-          const ns = tab.blocks;
+          const ns = tab.blocks || [];
+          if (!ns.length) return; // no blocks → no spans to compute
           const gx0 = Math.min(...ns.map(L)) - 60, gx1 = Math.max(...ns.map(R)) + 60;
           const gy0 = Math.min(...ns.map(T)) - 60, gy1 = Math.max(...ns.map(B)) + 60;
           tab.containers.forEach((s) => {
@@ -646,14 +830,17 @@
         // pass. A title that still conflicts after the best-side pick feeds
         // the outer convergence loop, which nudges the offending block.
         function placeTitles() {
-          if (!tab.containers.length) return;
+          if (!(tab.containers || []).length) return;
           const sides = ["above", "left", "top"];
-          const blockBoxes = tab.blocks.map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h }));
+          const blockBoxes = (tab.blocks || []).map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h }));
           const ordered = tab.containers.slice().sort((a, b) => (cy(a) - cy(b)) || (cx(a) - cx(b)));
           const placed = [];
           ordered.forEach((s) => {
-            let bestSide = (s.title && s.title.side) || "above", bestScore = Infinity;
-            for (const side of sides) {
+            // try the author's declared side first so it wins whenever clear
+            const declared = (s.title && s.title.side) || "above";
+            const trySides = [declared, ...sides.filter((x) => x !== declared)];
+            let bestSide = declared, bestScore = Infinity;
+            for (const side of trySides) {
               const tb = titleBox({ ...s, title: { side } });
               let score = 0;
               for (const b of blockBoxes) {
@@ -689,12 +876,16 @@
           for (let i = 0; i < items.length; i++) {
             for (let j = i + 1; j < items.length; j++) {
               const a = items[i], b = items[j];
-              if (!isConflict(a.kind, b.kind)) continue;
+              if (!isConflict(a, b)) continue;
               const g = gapFor(a.kind, b.kind);
               const p = penetration(a.box, b.box, g);
               if (p.ox > 0 && p.oy > 0) {
+                const type =
+                  a.kind === "container" && b.kind === "container" ? "zone-overlap" :
+                  (a.kind === "container" || b.kind === "container") &&
+                  (a.kind === "block" || b.kind === "block") ? "foreign-block" : "overlap";
                 conflicts.push({
-                  type: "overlap",
+                  type,
                   a: `${a.kind}:${a.id}`, b: `${b.kind}:${b.id}`,
                   gap: g, overlapX: +p.ox.toFixed(1), overlapY: +p.oy.toFixed(1),
                 });
@@ -742,7 +933,9 @@
           };
           let nudgedAny = false;
           for (const c of report.conflicts) {
-            if (c.type !== "overlap") continue;
+            // foreign-block (a block on a zone it doesn't belong to) is also
+            // fixable by pushing the block; spill/zone-overlap are not.
+            if (c.type !== "overlap" && c.type !== "foreign-block") continue;
             const [ka, ida] = idParts(c.a), [kb, idb] = idParts(c.b);
             let blockId, otherKind, otherId;
             if (ka === "block") { blockId = ida; otherKind = kb; otherId = idb; }
@@ -759,7 +952,18 @@
 
         // --- orchestration ------------------------------------------------
         // Call the data-coord resolvers BEFORE render; resolveLabels AFTER.
-        function run() { resolveBlocksBFS(); fitContainers(); placeTitles(); }
+        // Two-level pipeline: settle blocks inside each zone → pack zones +
+        // free blocks as rigid units → normalize to the top-left origin →
+        // grow containers around members → place titles.
+        function run() {
+          const units = groupUnits();
+          units.forEach((u) => resolveBlocks(u.members)); // level 1: within each zone
+          units.forEach((u) => { u.box = unitBox(u); });
+          packUnits(units);                               // level 2: zones as rigid units
+          normalizeOrigin(units);                         // top-left corner contract
+          fitContainers();
+          placeTitles();
+        }
 
         return {
           // primitives (exposed for custom layouts / tests)
@@ -767,7 +971,8 @@
           // policy + registry
           POLICY: { GAP, isConflict, gapFor }, register, clear, reg,
           // resolvers + audit
-          resolveBlocksBFS, pushClear, placeTitles, fitContainers, resolveLabels,
+          resolveBlocks, resolveBlocksBFS, pushClear, placeTitles, fitContainers,
+          groupUnits, unitBox, moveUnit, packUnits, normalizeOrigin, resolveLabels,
           nudgeBlocksForConflicts, audit, run,
         };
       }
@@ -1326,11 +1531,14 @@
       // point along it, and hover slides it to the cursor without detaching.
       // ---------------------------------------------------------------------
       const LABEL_H = 19;
-      // sum of overlap "area" of `box` against every obstacle (0 ⇒ clear)
+      // sum of overlap "area" of `box` against every obstacle (0 ⇒ clear).
+      // Each obstacle may carry its own audit clearance in `_gap` (blocks and
+      // titles need GAP.mixed = 8; sibling labels need GAP.label = 4) so the
+      // search accepts only spots the audit will also accept.
       function labelScore(tab, box, obstacles) {
         let s = 0;
         for (const o of obstacles) {
-          const p = tab.layout.penetration(box, o, 4);
+          const p = tab.layout.penetration(box, o, o._gap != null ? o._gap : 4);
           if (p.ox > 0 && p.oy > 0) s += p.ox * p.oy;
         }
         return s;
@@ -1387,7 +1595,11 @@
         const { p1, c, p2 } = rec._curve;
         const short = Math.hypot(p2.x - p1.x, p2.y - p1.y) < rec.labelW * 0.8;
         const tTiers = short ? [[0.5]] : [T_CANDIDATES, T_CANDIDATES.concat(T_EXPANDED)];
-        const oTiers = [N_OFFSETS, N_OFFSETS.concat(N_OFFSETS_EXPANDED)];
+        // last-resort escape offsets scale with the label's own width — a wide
+        // label pinned on a short edge between stacked blocks needs more than
+        // the fixed ±64 to slide clear sideways off the line.
+        const far = rec.labelW / 2 + 30;
+        const oTiers = [N_OFFSETS, N_OFFSETS.concat(N_OFFSETS_EXPANDED, [far, -far, far + 22, -far - 22])];
         let best = rec._box, bestScore = Infinity;
         search:
         for (const ts of tTiers) {
@@ -1410,11 +1622,13 @@
           .map((edge, idx) => ({ edge, idx, rec: tab.state.edgeEls[idx] }))
           .filter((x) => x.rec && x.rec.bg && x.rec.txt);
         if (!labeled.length) return;
-        // static obstacles: every block box + every container title box
+        // static obstacles: every block box + every container title box.
+        // Tagged with the audit clearance (GAP.mixed = 8) so the label search
+        // and the auditor agree on what "clear" means.
         const statics = [
           ...tab.layout.reg.block.map((e) => e.get()),
           ...tab.layout.reg.title.map((e) => e.get()),
-        ].filter(Boolean);
+        ].filter(Boolean).map((b) => Object.assign({}, b, { _gap: 8 }));
 
         // seed each label on its curve midpoint (t = 0.5, no offset) — the
         // seed position also drives the top-left settle order below.
@@ -1619,7 +1833,14 @@
         if (def.type === "sequence") {
           tab.actors = def.actors; tab.messages = def.messages;
         } else {
-          tab.blocks = def.blocks; tab.containers = def.containers; tab.edges = def.edges;
+          // containers (and edges) are OPTIONAL — a tab may omit them entirely
+          // or mix zoned and free blocks; free blocks pack as standalone units.
+          tab.blocks = def.blocks || []; tab.containers = def.containers || []; tab.edges = def.edges || [];
+          const known = new Set(tab.containers.map((s) => s.id));
+          tab.blocks.forEach((b) => {
+            if (b.container && !known.has(b.container))
+              console.warn(`[layout] block '${b.id}' references unknown container '${b.container}' — treated as free`);
+          });
         }
         tab.layout = makeLayout(tab);
 
@@ -1667,7 +1888,7 @@
         }
 
         // 1) resolve geometry on the DATA before drawing
-        tab.layout.run();                // BFS-settle blocks + grow containers + place titles
+        tab.layout.run();                // settle blocks in zones + pack zones top-left + fit + titles
 
         // 2) draw
         renderPass();
