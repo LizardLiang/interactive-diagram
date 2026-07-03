@@ -297,6 +297,16 @@ Before handing over, open the file in a browser and confirm:
 - [ ] **White export padding present** — the artwork isn't flush to the edge.
 - [ ] **Export works** — `↓ PNG（貼到 PPT）` downloads a 2× PNG and `↓ SVG` downloads valid SVG with no unresolved `var(--…)`.
 
+## Maintaining the shipped examples
+
+Every file under `samples/` and `examples/` is a self-contained snapshot that
+**embeds the template runtime it was generated from** — editing a skeleton
+does *not* update them. After changing `assets/skeleton.html` or
+`assets/platform-skeleton.html`, run `node scripts/regen-examples.mjs` to
+splice each shipped file's authored content (its config object + `<title>`)
+into the current template, then open every regenerated file and confirm its
+layout audit passes before shipping.
+
 ## Deliverable
 
 One `.html` file. Open it. It works. The user can edit the config object at the top and reload to change the entire picture — `app` for the interactive skeleton, `config.sections` for the platform poster.
