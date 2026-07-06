@@ -163,7 +163,10 @@ const app = {
 
       edges: [
         { from, to, label, style, bendDir },
-        // style: "sync" | "async" | "dashed"; bendDir: 1 | -1 to bow parallel edges apart
+        // style: "sync" | "async" | "dashed"
+        // curve direction is auto-derived from each port's face so the
+        // arrowhead always points into the target block; bendDir: 1 | -1 is an
+        // override, only needed to bow parallel edges apart from each other
       ],
 
       // For type: "sequence" tabs, use `actors` + `messages` instead of
