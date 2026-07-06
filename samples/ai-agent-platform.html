@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
+    <meta name="generator" content="interactive-diagram v1.9.0" />
     <title>AI Agent Platform — Interactive Diagram</title>
     <!--
       ============================================================================
@@ -1157,27 +1159,146 @@
       //   the tangent at p2 points into p2's face, i.e. the arrowhead always
       //   enters the target block instead of hiding under it.
       // Degenerate chords / zero dot products fall back to offset 0 (straight).
+      //
+      // edgeGeom (below) only takes this branch directly when the edge has an
+      // authored bendDir; un-authored edges route through avoidControl, which
+      // starts from this same bow and grows/flips it just enough to clear any
+      // block or zone sitting between the endpoints (auto-avoidance) — falling
+      // back to this exact curve whenever nothing is in the way (R5, unchanged).
       const BOW_OFFSET = 28;
-      function edgeControl(p1, p2, n1, n2, bendDir) {
-        const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const MAX_BOW = 220;      // cap so the curve never balloons off-canvas
+      const BOW_STEP = 16;      // offset search granularity
+      const CLEAR_MARGIN = 12;  // px the curve must stay outside an obstacle
+      // unit perpendicular of chord p1->p2 (rotate the chord vector 90°); null
+      // for coincident points (degenerate chord).
+      function perpUnit(p1, p2) {
         const nx = -(p2.y - p1.y), ny = p2.x - p1.x;
         const len = Math.hypot(nx, ny);
-        if (!len) return { x: mx, y: my };
+        return len ? { x: nx / len, y: ny / len } : null;
+      }
+      // auto-sign so the bow's tangent at p2 points into p2's face (arrowhead
+      // enters the target block instead of hiding under it); defaults to +1 on
+      // an aligned chord (dot===0) so avoidControl always has a side to grow
+      // from even when the un-bowed curve would be dead straight.
+      function preferredSign(u, n2) {
+        const dot = u.x * n2.x + u.y * n2.y;
+        return dot === 0 ? 1 : Math.sign(dot);
+      }
+      function edgeControl(p1, p2, n1, n2, bendDir) {
+        const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+        const u = perpUnit(p1, p2);
+        if (!u) return { x: mx, y: my };
         if (bendDir != null) {
           const off = BOW_OFFSET * bendDir;
-          return { x: mx + (nx / len) * off, y: my + (ny / len) * off };
+          return { x: mx + u.x * off, y: my + u.y * off };
         }
-        const ux = nx / len, uy = ny / len;
-        const dot = ux * n2.x + uy * n2.y;
+        const dot = u.x * n2.x + u.y * n2.y;
         if (dot === 0) return { x: mx, y: my }; // aligned → straight
         const off = BOW_OFFSET * Math.sign(dot);
-        return { x: mx + ux * off, y: my + uy * off };
+        return { x: mx + u.x * off, y: my + u.y * off };
+      }
+      // --- obstacle-avoidance geometry (auto-route around blocks/zones) ------
+      // Dependency-free box + curve-sampling helpers; obstacles are plain
+      // {x,y,w,h} boxes (blocks and containers already share that shape).
+      function containerBox(tab, id) {
+        const s = (tab.containers || []).find((c) => c.id === id);
+        return s ? { x: s.x, y: s.y, w: s.w, h: s.h } : null;
+      }
+      function blocksExcept(tab, a, b) {
+        return tab.blocks
+          .filter((n) => n.id !== a && n.id !== b)
+          .map((n) => ({ x: n.x, y: n.y, w: n.w, h: n.h }));
+      }
+      function pointInBox(pt, box, pad = 0) {
+        return pt.x > box.x - pad && pt.x < box.x + box.w + pad &&
+               pt.y > box.y - pad && pt.y < box.y + box.h + pad;
+      }
+      // true if no interior sample of the curve lands inside `box` inflated by
+      // `margin`; endpoints (t=0/1) are skipped so a port sitting flush on a
+      // neighboring face never self-trips.
+      function curveClears(p1, c, p2, box, margin, SAMPLES = 16) {
+        for (let i = 1; i < SAMPLES; i++) {
+          if (pointInBox(bezierAt(p1, c, p2, i / SAMPLES), box, margin)) return false;
+        }
+        return true;
+      }
+      // worst-case depth (px) any interior curve sample sits inside the
+      // inflated box; 0 when the curve already clears it. Used only as a
+      // best-effort tiebreak when no offset fully clears within MAX_BOW.
+      function curvePenetration(p1, c, p2, box, margin, SAMPLES = 16) {
+        const bx0 = box.x - margin, bx1 = box.x + box.w + margin;
+        const by0 = box.y - margin, by1 = box.y + box.h + margin;
+        let maxDepth = 0;
+        for (let i = 1; i < SAMPLES; i++) {
+          const q = bezierAt(p1, c, p2, i / SAMPLES);
+          if (q.x <= bx0 || q.x >= bx1 || q.y <= by0 || q.y >= by1) continue;
+          const depth = Math.min(q.x - bx0, bx1 - q.x, q.y - by0, by1 - q.y);
+          if (depth > maxDepth) maxDepth = depth;
+        }
+        return maxDepth;
+      }
+      // obstacles for `edge`: every sibling block except its own from/to, plus
+      // every container EXCEPT one that already holds the from or to block (an
+      // edge legitimately starting/ending inside a zone must not be forced to
+      // avoid that zone's own border).
+      function edgeObstacles(tab, edge) {
+        const boxes = blocksExcept(tab, edge.from, edge.to);
+        const fromC = tab.blocks.find((b) => b.id === edge.from)?.container;
+        const toC = tab.blocks.find((b) => b.id === edge.to)?.container;
+        (tab.containers || []).forEach((s) => {
+          if (s.id === fromC || s.id === toC) return; // don't avoid own zone
+          const box = containerBox(tab, s.id);
+          if (box) boxes.push(box);
+        });
+        return boxes;
+      }
+      // un-authored control point that auto-routes around obstacles: start
+      // from today's arrowhead-bow (edgeControl); if it already clears every
+      // obstacle, return it unchanged (R5). Otherwise grow the offset on each
+      // side (preferred side first) until a candidate clears everything, and
+      // take whichever side needed the smaller offset. If neither side clears
+      // within MAX_BOW, fall back to the side with the least residual
+      // penetration at the cap (best-effort, R3).
+      function avoidControl(tab, edge, p1, p2) {
+        const base = edgeControl(p1, p2, p1.normal, p2.normal, null);
+        const obstacles = edgeObstacles(tab, edge);
+        if (obstacles.every((b) => curveClears(p1, base, p2, b, CLEAR_MARGIN))) return base;
+
+        const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+        const u = perpUnit(p1, p2);
+        if (!u) return base; // degenerate chord — nothing to search
+        const sign = preferredSign(u, p2.normal);
+        const mkC = (off) => ({ x: mx + u.x * off, y: my + u.y * off });
+
+        let winner = null, winnerOff = Infinity;
+        let fallback = null, fallbackPen = Infinity;
+        for (const side of [sign, -sign]) {
+          let cleared = null, clearedOff = Infinity;
+          for (let off = BOW_OFFSET; off <= MAX_BOW; off += BOW_STEP) {
+            const c = mkC(side * off);
+            if (obstacles.every((b) => curveClears(p1, c, p2, b, CLEAR_MARGIN))) {
+              cleared = c; clearedOff = off; break;
+            }
+          }
+          if (cleared) {
+            if (clearedOff < winnerOff) { winnerOff = clearedOff; winner = cleared; }
+          } else {
+            const capC = mkC(side * MAX_BOW);
+            const pen = Math.max(...obstacles.map((b) => curvePenetration(p1, capC, p2, b, CLEAR_MARGIN)));
+            if (pen < fallbackPen) { fallbackPen = pen; fallback = capC; }
+          }
+        }
+        return winner || fallback || base;
       }
       // {p1, p2, c} for an edge from the CURRENT block positions — single
       // source of truth so render/drag/label/hover never disagree on the curve.
+      // An authored bendDir always wins (edgeControl, unchanged); otherwise the
+      // curve auto-routes around any block/zone sitting between the endpoints.
       function edgeGeom(tab, edge) {
         const p1 = portN(tab, edge.from, edge.to, true), p2 = portN(tab, edge.from, edge.to, false);
-        const c = edgeControl(p1, p2, p1.normal, p2.normal, edge.bendDir != null ? edge.bendDir : null);
+        const c = edge.bendDir != null
+          ? edgeControl(p1, p2, p1.normal, p2.normal, edge.bendDir)
+          : avoidControl(tab, edge, p1, p2);
         return { p1, c, p2 };
       }
       function curve(p1, c, p2) {
@@ -1463,13 +1584,16 @@
           const d = curve(p1, c, p2);
           rec.path.setAttribute("d", d); if (rec.hit) rec.hit.setAttribute("d", d);
           if (rec.bg && rec.txt) {
-            // cheap re-centering on the chord midpoint while a block is dragged;
-            // the full slide-along placement re-runs on pointerup.
-            const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+            // cheap re-centering on the curve midpoint (t=0.5) while a block is
+            // dragged, mirroring placeLabels' seed; the full slide-along
+            // placement re-runs on pointerup. Using the chord midpoint here
+            // instead would desync from the bowed curve once avoidControl
+            // pushes the control point off-line.
+            const m = bezierAt(p1, c, p2, 0.5);
             const w = +rec.bg.getAttribute("width");
-            rec.bg.setAttribute("x", mx - w / 2); rec.bg.setAttribute("y", my - 11);
-            rec.txt.setAttribute("x", mx); rec.txt.setAttribute("y", my + 3);
-            rec.labelHome = { x: mx - w / 2, y: my - 11 };
+            rec.bg.setAttribute("x", m.x - w / 2); rec.bg.setAttribute("y", m.y - 11);
+            rec.txt.setAttribute("x", m.x); rec.txt.setAttribute("y", m.y + 3);
+            rec.labelHome = { x: m.x - w / 2, y: m.y - 11 };
           }
         });
       }

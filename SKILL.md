@@ -167,6 +167,10 @@ const app = {
         // curve direction is auto-derived from each port's face so the
         // arrowhead always points into the target block; bendDir: 1 | -1 is an
         // override, only needed to bow parallel edges apart from each other
+        // when no bendDir is set, the curve also auto-routes around any block
+        // or zone that sits between the endpoints (grows/flips its bow just
+        // enough to clear it); an explicit bendDir always wins over this and
+        // is never auto-adjusted
       ],
 
       // For type: "sequence" tabs, use `actors` + `messages` instead of
@@ -309,6 +313,42 @@ does *not* update them. After changing `assets/skeleton.html` or
 splice each shipped file's authored content (its config object + `<title>`)
 into the current template, then open every regenerated file and confirm its
 layout audit passes before shipping.
+
+Both templates carry a `<meta name="generator" content="interactive-diagram
+vX.Y.Z" />` stamp in their `<head>` (right after the viewport meta). **Bump
+this version string in both templates on every feature ship**, alongside the
+commit-message version — it's the single source of truth `scripts/upgrade-
+diagram.mjs` reads to detect staleness, and `regen-examples.mjs` propagates it
+to every shipped file for free since the splice re-hosts the whole template
+head.
+
+## Upgrading an existing diagram
+
+When the user asks to update/upgrade an existing diagram file to the latest
+skill runtime (e.g. to pick up a newly shipped layout mechanism like edge
+obstacle avoidance), don't hand-splice it — run the upgrade script:
+
+```
+node scripts/upgrade-diagram.mjs <file> [--check] [--force]
+```
+
+- Run with `--check` first if you want to report the version change before
+  committing to it: it prints `fileVer -> targetVer` and makes no changes.
+- A bare run re-hosts the file's config object and `<title>` onto the current
+  matching template (auto-detected: `const app = {` -> the interactive
+  skeleton, `const config = {` -> the platform poster) and overwrites the file
+  in place. If the file is already current, it reports "up to date" and
+  changes nothing unless you pass `--force`.
+- Report the printed `vOLD -> vNEW` to the user and tell them to reopen the
+  file and confirm the layout audit passes.
+- **Config-only contract**: only the config object and `<title>` are the
+  user's authored content — everything else is the template. Any manual edits
+  made outside the config block are replaced by the current runtime on
+  upgrade. This is expected, not a bug; the original is preserved at
+  `<file>.bak` before the overwrite, in case those edits need recovering.
+- If the script aborts (ambiguous or missing config marker), it writes
+  nothing — no `.bak`, no changes — and prints a message to fall back to a
+  manual splice instead.
 
 ## Deliverable
 

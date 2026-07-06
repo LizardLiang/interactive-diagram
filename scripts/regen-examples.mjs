@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { configSpan, titleOf, spliceTitle, SpliceError } from "./splice.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,38 +24,24 @@ const TARGETS = [
   { file: "samples/platform-architecture.html", template: "assets/platform-skeleton.html", marker: "const config = {" },
 ];
 
-const END = "\n      };"; // config end marker (both templates share the indentation convention)
-
-// span = [start, end) of the config object inside `html`
-function configSpan(html, marker, file) {
-  const a = html.indexOf(marker);
-  if (a < 0) fail(`${file}: config marker "${marker}" not found`);
-  if (html.indexOf(marker, a + 1) >= 0) fail(`${file}: config marker "${marker}" is ambiguous (found twice)`);
-  const b = html.indexOf(END, a);
-  if (b < 0) fail(`${file}: config end marker not found after ${marker}`);
-  return [a, b + END.length];
-}
-
-function titleOf(html, file) {
-  const m = html.match(/<title>([^<]*)<\/title>/);
-  if (!m) fail(`${file}: <title> not found`);
-  return m[1];
-}
-
 function fail(msg) {
   console.error(`✗ ${msg}`);
   process.exit(1);
 }
 
-for (const t of TARGETS) {
-  const target = readFileSync(join(ROOT, t.file), "utf8");
-  const template = readFileSync(join(ROOT, t.template), "utf8");
-  const [ta, tb] = configSpan(target, t.marker, t.file);
-  const [pa, pb] = configSpan(template, t.marker, t.template);
-  const title = t.title || titleOf(target, t.file);
-  const out = (template.slice(0, pa) + target.slice(ta, tb) + template.slice(pb))
-    .replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
-  writeFileSync(join(ROOT, t.file), out);
-  console.log(`✓ regenerated ${t.file}  (template: ${t.template}, title: "${title}")`);
+try {
+  for (const t of TARGETS) {
+    const target = readFileSync(join(ROOT, t.file), "utf8");
+    const template = readFileSync(join(ROOT, t.template), "utf8");
+    const [ta, tb] = configSpan(target, t.marker, t.file);
+    const [pa, pb] = configSpan(template, t.marker, t.template);
+    const title = t.title || titleOf(target, t.file);
+    const out = spliceTitle(template.slice(0, pa) + target.slice(ta, tb) + template.slice(pb), title);
+    writeFileSync(join(ROOT, t.file), out);
+    console.log(`✓ regenerated ${t.file}  (template: ${t.template}, title: "${title}")`);
+  }
+  console.log("done — open each file and confirm its layout audit passes before shipping.");
+} catch (e) {
+  if (e instanceof SpliceError) fail(e.message);
+  throw e;
 }
-console.log("done — open each file and confirm its layout audit passes before shipping.");
