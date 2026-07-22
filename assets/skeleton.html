@@ -482,10 +482,16 @@
         fontSize: 13, lineHeight: 18, padX: 36, padY: 26,
         minWidth: 140, minHeight: 58, minTextWidth: 160, maxTextWidth: 260,
       };
+      const LABEL_MEASURE_CONTEXT = document.createElement("canvas").getContext("2d");
       function labelGlyphWidth(char, fontSize = NODE_LABEL.fontSize) {
         return (char.codePointAt(0) > 0x2000 ? 0.95 : 0.55) * fontSize;
       }
       function labelLineWidth(line, fontSize = NODE_LABEL.fontSize) {
+        if (LABEL_MEASURE_CONTEXT) {
+          const family = getComputedStyle(document.body).fontFamily || "sans-serif";
+          LABEL_MEASURE_CONTEXT.font = `600 ${fontSize}px ${family}`;
+          return LABEL_MEASURE_CONTEXT.measureText(line).width;
+        }
         return Array.from(line).reduce((width, char) => width + labelGlyphWidth(char, fontSize), 0);
       }
       function wrapLabelCharacters(source, maxWidth) {
