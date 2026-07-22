@@ -206,7 +206,9 @@ The renderer, theme, and every interaction below ship in the skeleton — you do
 - **Drag nodes** to reposition (edges follow); nodes are clamped to the viewport.
 - **Help** modal documents every interaction; close via X, backdrop, or `Esc`.
 - **Sequence step mode** (`type: "sequence"` only) → Prev/Next reveal messages one at a time along the lifelines.
-- **Dark mode**, **Download SVG**, and **Download PNG** (2× raster) all from the toolbar.
+- **Long node labels** preserve authored newlines, wrap automatically, and grow their block before layout runs.
+- **Connection-line and edge-label color pickers** provide presentation-safe contrast; reset restores the current theme defaults.
+- **Dark mode**, **Download SVG**, and **Download PNG** all live in the toolbar. PNG supports original 2×, fixed 16:9 (1920×1080), and fixed 4:3 (1600×1200) output without stretching. Exports inline computed SVG styles and include an opaque theme background.
 
 The diagram renders as **inline SVG** (interactive, scalable, exportable — not Canvas), with rounded nodes, soft shadows, curved/orthogonal edge routing, a per-`type` color legend, and a system font stack. The aesthetic target is clean and modern — think Linear, Vercel, or Stripe docs.
 
@@ -227,7 +229,9 @@ The layout guard does the overlap work; your job is to confirm it succeeded and 
 
 - The console shows `✓ Layout audit [<tab id>]: no overlaps` for **every** tab. If a tab logs conflicts, adjust that block's container membership or starting hints and reload — don't ship overlaps.
 - Every node's panel has real content, the chain highlight follows the true flow, and the legend matches the node types you used.
-- Dark mode, Fit to screen, and both exports work.
+- Long labels wrap without clipping, and the layout audit still passes after blocks grow.
+- Dark mode, Fit to screen, custom line/label colors, and both exports work.
+- Verify PNG in original, 16:9, and 4:3 modes; connectors, labels, lifelines, and the theme background must remain visible in the downloaded files.
 
 If the audit can't clear a stubborn tab on its own, the **⚑ Audit overlap** → auto-fix button restores the tidy built layout; reach for it before hand-tuning coordinates.
 
