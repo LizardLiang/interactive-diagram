@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
-    <meta name="generator" content="interactive-diagram v1.9.0" />
+    <meta name="generator" content="interactive-diagram v1.10.0" />
     <title>Interactive Diagram — Skeleton</title>
     <!--
       ============================================================================
@@ -140,6 +140,18 @@
         transition: background 0.15s; white-space: nowrap;
       }
       .tb-btn:hover { background: var(--border); }
+      .tb-select {
+        background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+        padding: 5px 8px; font-size: 12px; color: var(--fg); cursor: pointer;
+      }
+      .tb-color-label {
+        display: inline-flex; align-items: center; gap: 4px;
+        color: var(--fg-muted); font-size: 11px; white-space: nowrap;
+      }
+      .tb-color {
+        width: 28px; height: 26px; padding: 2px; border: 1px solid var(--border);
+        border-radius: 7px; background: var(--surface); cursor: pointer;
+      }
 
       /* tab strip — only shown when there is more than one tab */
       #tab-strip { display: none; gap: 4px; align-items: center; }
@@ -238,8 +250,17 @@
       <div class="tb-sep"></div>
       <button class="tb-btn" id="btn-audit">⚑ 檢查重疊</button>
       <div class="tb-sep"></div>
+      <label class="tb-color-label">線色 <input class="tb-color" id="edge-color" type="color" aria-label="連接線顏色" /></label>
+      <label class="tb-color-label">線旁字 <input class="tb-color" id="edge-label-color" type="color" aria-label="連接線標籤顏色" /></label>
+      <button class="tb-btn" id="btn-reset-colors" title="恢復主題預設配色">↺ 配色</button>
+      <div class="tb-sep"></div>
       <button class="tb-btn" id="btn-svg">↓ SVG</button>
-      <button class="tb-btn" id="btn-png">↓ PNG</button>
+      <select class="tb-select" id="png-aspect" aria-label="匯出 PNG">
+        <option value="" selected hidden>↓ PNG</option>
+        <option value="original">原始比例</option>
+        <option value="wide">16:9</option>
+        <option value="standard">4:3</option>
+      </select>
     </div>
 
     <div id="canvas"></div>
@@ -272,7 +293,8 @@
           <dt>分頁</dt><dd>在上方工具列切換不同檢視。</dd>
           <dt>◐ / ◑</dt><dd>切換淺色 / 深色主題。</dd>
           <dt>⚑ 檢查重疊</dt><dd>檢查節點是否重疊；發現時可一鍵自動修正版面。</dd>
-          <dt>↓ SVG / PNG</dt><dd>將目前檢視匯出為圖片。</dd>
+          <dt>線色 / 線旁字</dt><dd>選擇簡報用的高對比連接線與標籤顏色；「↺ 配色」恢復主題預設。</dd>
+          <dt>↓ SVG / PNG</dt><dd>將目前檢視匯出為自包含圖片；PNG 可選原圖、16:9 或 4:3，固定比例不會拉伸內容。</dd>
         </dl>
       </div>
     </div>
@@ -301,6 +323,9 @@
       //                  the block packs as a FREE unit alongside the zones.
       //                  x/y/w/h are STARTING HINTS; layout.run() finalizes
       //                  them from the top-left corner so nothing overlaps.
+      //                  `label` keeps authored \n as hard breaks; long lines
+      //                  (English or CJK) wrap automatically and the block
+      //                  grows to fit BEFORE layout runs — no manual sizing.
       //   edges[]      — connections between blocks.
       const app = {
         title: "圖表",
@@ -323,17 +348,20 @@
                 tech: ["React", "EventSource"],
                 responsibilities: ["Render UI", "POST user actions", "Subscribe to SSE stream"] },
               { id: "api", container: "backend", type: "http", x: 120, y: 360, w: 220, h: 90,
-                label: "API service",
+                // long single-line label → auto-wraps, block grows (no \n needed)
+                label: "API gateway and request validation service",
                 description: "Thin HTTP layer. Validates requests, enqueues work, returns 202 immediately.",
                 tech: ["ASP.NET Core"],
                 responsibilities: ["Auth + validation", "Enqueue work", "Stream SSE back"] },
               { id: "worker", container: "backend", type: "worker", x: 420, y: 360, w: 220, h: 90,
+                // authored \n stays a hard break — wrapping never removes it
                 label: "Worker\n(BackgroundService)",
                 description: "Drains the queue and runs the long-lived job, writing results to the store.",
                 tech: ["IHostedService"],
                 responsibilities: ["Dequeue jobs", "Run async loop", "Persist results"] },
               { id: "db", container: "data", type: "db", x: 420, y: 600, w: 220, h: 90,
-                label: "Database",
+                // long CJK label → character-wraps (no spaces to break on)
+                label: "交易資料庫（事件日誌與關聯式資料表）",
                 description: "Append-only event log + relational tables.",
                 tech: ["PostgreSQL"],
                 responsibilities: ["Persist state", "Serve reads"] },
@@ -453,6 +481,77 @@
         sync: "同步 sync", stream: "串流 stream", return: "回傳 return", internal: "內部 internal",
       };
 
+      // Keep labels readable without requiring hand-tuned line breaks or box
+      // sizes. Authored newlines remain hard breaks; long lines wrap and grow
+      // their block before the layout guard packs zones and routes edges.
+      const NODE_LABEL = {
+        fontSize: 13, lineHeight: 18, padX: 36, padY: 26,
+        minWidth: 140, minHeight: 58, minTextWidth: 160, maxTextWidth: 260,
+      };
+      const LABEL_MEASURE_CONTEXT = document.createElement("canvas").getContext("2d");
+      function labelGlyphWidth(char, fontSize = NODE_LABEL.fontSize) {
+        return (char.codePointAt(0) > 0x2000 ? 0.95 : 0.55) * fontSize;
+      }
+      // Block-label wrapping measures with canvas measureText for precision;
+      // edge/zone/sequence labels stay on the cheaper glyph heuristic
+      // (tab.layout.measureText) so legacy layout and routing don't shift.
+      function labelLineWidth(line, fontSize = NODE_LABEL.fontSize) {
+        if (LABEL_MEASURE_CONTEXT) {
+          const family = getComputedStyle(document.body).fontFamily || "sans-serif";
+          LABEL_MEASURE_CONTEXT.font = `600 ${fontSize}px ${family}`;
+          return LABEL_MEASURE_CONTEXT.measureText(line).width;
+        }
+        return Array.from(line).reduce((width, char) => width + labelGlyphWidth(char, fontSize), 0);
+      }
+      function wrapLabelCharacters(source, maxWidth) {
+        const lines = [];
+        let current = "", width = 0;
+        Array.from(source).forEach((char) => {
+          const charWidth = labelGlyphWidth(char);
+          if (current && width + charWidth > maxWidth) {
+            lines.push(current.trimEnd());
+            current = char === " " ? "" : char;
+            width = current ? charWidth : 0;
+            return;
+          }
+          current += char; width += charWidth;
+        });
+        if (current || !lines.length) lines.push(current.trimEnd());
+        return lines;
+      }
+      function wrapLabelLine(line, maxWidth) {
+        const source = String(line).trim();
+        if (!source) return [""];
+        const words = source.match(/\S+/gu) || [];
+        if (words.length < 2) return wrapLabelCharacters(source, maxWidth);
+        const lines = [];
+        let current = "";
+        words.forEach((word) => {
+          const candidate = current ? `${current} ${word}` : word;
+          if (labelLineWidth(candidate) <= maxWidth) { current = candidate; return; }
+          if (current) lines.push(current);
+          if (labelLineWidth(word) <= maxWidth) { current = word; return; }
+          const chunks = wrapLabelCharacters(word, maxWidth);
+          lines.push(...chunks.slice(0, -1)); current = chunks.at(-1) || "";
+        });
+        if (current) lines.push(current);
+        return lines;
+      }
+      function fitBlockLabel(block) {
+        const authoredWidth = Number.isFinite(block.w) ? block.w : NODE_LABEL.minWidth;
+        const authoredHeight = Number.isFinite(block.h) ? block.h : NODE_LABEL.minHeight;
+        const maxTextWidth = Math.max(NODE_LABEL.minTextWidth,
+          Math.min(NODE_LABEL.maxTextWidth, authoredWidth - NODE_LABEL.padX));
+        const lines = String(block.label || block.id).split("\n")
+          .flatMap((line) => wrapLabelLine(line, maxTextWidth));
+        const widest = Math.max(...lines.map((line) => labelLineWidth(line)));
+        block._labelLines = lines;
+        block.w = Math.max(authoredWidth, NODE_LABEL.minWidth, Math.ceil(widest + NODE_LABEL.padX));
+        block.h = Math.max(authoredHeight, NODE_LABEL.minHeight,
+          lines.length * NODE_LABEL.lineHeight + NODE_LABEL.padY);
+      }
+      function fitBlockLabels(blocks) { blocks.forEach(fitBlockLabel); }
+
       // =====================================================================
       // === LAYOUT GUARD ====================================================
       // makeLayout(tab) builds a per-tab guard: distance / overlap checking
@@ -475,7 +574,7 @@
           let max = 0;
           for (const line of String(str).split("\n")) {
             let w = 0;
-            for (const ch of line) w += (ch.codePointAt(0) > 0x2000 ? 0.95 : 0.55) * fontSize;
+            for (const ch of line) w += labelGlyphWidth(ch, fontSize);
             if (w > max) max = w;
           }
           return max;
@@ -1009,7 +1108,7 @@
             id: `arrow-${kind}-${tabId}`, viewBox: "0 0 10 10", refX: "9", refY: "5",
             markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse",
           });
-          m.appendChild(svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--edge)" }));
+          m.appendChild(svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--diagram-edge, var(--edge))" }));
           defs.appendChild(m);
         });
         // sequence arrowhead — fill follows the line stroke (context-stroke) so a
@@ -1218,7 +1317,7 @@
         // wide transparent hit stroke so the thin line is easy to hover
         const hit = svgEl("path", { d, fill: "none", stroke: "transparent", "stroke-width": "18", "pointer-events": "stroke" });
         const path = svgEl("path", {
-          d, fill: "none", stroke: "var(--edge)", "stroke-width": "2",
+          d, fill: "none", stroke: "var(--diagram-edge, var(--edge))", "stroke-width": "2",
           "marker-end": `url(#arrow-${edge.style === "async" ? "async" : "sync"}-${tab.id})`,
           ...(edge.style === "dashed" ? { "stroke-dasharray": "6 5" } : {}),
         });
@@ -1229,7 +1328,7 @@
           const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
           labelW = tab.layout.measureText(edge.label, 11) + 14;
           bg = svgEl("rect", { x: mx - labelW / 2, y: my - 11, width: labelW, height: 19, rx: 5, fill: "var(--bg)", opacity: "0.92" });
-          txt = svgEl("text", { x: mx, y: my + 3, "text-anchor": "middle", "font-size": "11", fill: "var(--fg-muted)" });
+          txt = svgEl("text", { x: mx, y: my + 3, "text-anchor": "middle", "font-size": "11", fill: "var(--diagram-edge-label, var(--fg-muted))" });
           txt.textContent = edge.label;
           g.appendChild(bg); g.appendChild(txt);
 
@@ -1257,12 +1356,12 @@
           x: block.x, y: block.y, width: block.w, height: block.h, rx: 12,
           fill: c.fill, stroke: c.stroke, "stroke-width": "2", filter: `url(#shadow-${tab.id})`,
         }));
-        const lines = block.label.split("\n"), lineH = 18;
+        const lines = block._labelLines || String(block.label || block.id).split("\n"), lineH = NODE_LABEL.lineHeight;
         const startY = block.y + block.h / 2 - ((lines.length - 1) * lineH) / 2 + 5;
         lines.forEach((line, i) => {
           const t = svgEl("text", {
             x: block.x + block.w / 2, y: startY + i * lineH, "text-anchor": "middle",
-            "font-size": "13", "font-weight": "600", fill: "var(--fg)",
+            "font-size": String(NODE_LABEL.fontSize), "font-weight": "600", fill: "var(--fg)",
           });
           t.textContent = line; g.appendChild(t);
         });
@@ -1374,7 +1473,7 @@
           const x = cx(i), col = TYPE[a.type] || TYPE.worker;
           lifeG.appendChild(svgEl("line", {
             x1: x, y1: lifelineTop, x2: x, y2: lifelineBot,
-            stroke: col.stroke, "stroke-width": "1.5", "stroke-dasharray": "6 6", opacity: "0.5",
+            stroke: `var(--diagram-edge, ${col.stroke})`, "stroke-width": "1.5", "stroke-dasharray": "6 6", opacity: "0.5",
           }));
           [S.topY, bottomBoxY].forEach((by) => {
             actorG.appendChild(svgEl("rect", {
@@ -1417,12 +1516,12 @@
             const x = cx(idxOf[m.from]);
             const d = `M${x},${yy} h${S.loopW} v${S.loopH} h${-S.loopW}`;
             g.appendChild(svgEl("path", { d, fill: "none", stroke: "transparent", "stroke-width": "16", "pointer-events": "stroke" }));
-            g.appendChild(svgEl("path", { d, fill: "none", stroke: st.stroke, "stroke-width": "2",
+            g.appendChild(svgEl("path", { d, fill: "none", stroke: `var(--diagram-edge, ${st.stroke})`, "stroke-width": "2",
               "marker-end": `url(#seqarrow-${tab.id})`, ...dash }));
             const lx = x + S.loopW + 12, ly = yy + S.loopH / 2 - S.labelH / 2;
             labelBox(g, lx, ly, lw);
             const t = svgEl("text", { x: lx + lw / 2, y: ly + S.labelH / 2 + 6, "text-anchor": "middle",
-              "font-size": S.labelFS, "font-weight": "600", fill: "var(--fg)" });
+              "font-size": S.labelFS, "font-weight": "600", fill: "var(--diagram-edge-label, var(--fg))" });
             t.textContent = m.label; g.appendChild(t);
             bbMaxX = Math.max(bbMaxX, lx + lw);
           } else {
@@ -1431,12 +1530,12 @@
             const x1 = cx(idxOf[m.from]), x2 = cx(idxOf[m.to]);
             const d = `M${x1},${yy} L${x2},${yy}`;
             g.appendChild(svgEl("path", { d, fill: "none", stroke: "transparent", "stroke-width": "16", "pointer-events": "stroke" }));
-            g.appendChild(svgEl("path", { d, fill: "none", stroke: st.stroke, "stroke-width": "2.5",
+            g.appendChild(svgEl("path", { d, fill: "none", stroke: `var(--diagram-edge, ${st.stroke})`, "stroke-width": "2.5",
               "marker-end": `url(#seqarrow-${tab.id})`, ...dash }));
             const mxp = (x1 + x2) / 2, lx = mxp - lw / 2, ly = yy - S.labelH - 8;
             labelBox(g, lx, ly, lw);
             const t = svgEl("text", { x: mxp, y: ly + S.labelH / 2 + 6, "text-anchor": "middle",
-              "font-size": S.labelFS, "font-weight": "600", fill: "var(--fg)" });
+              "font-size": S.labelFS, "font-weight": "600", fill: "var(--diagram-edge-label, var(--fg))" });
             t.textContent = m.label; g.appendChild(t);
             bbMinX = Math.min(bbMinX, lx); bbMaxX = Math.max(bbMaxX, lx + lw);
           }
@@ -1491,7 +1590,7 @@
         const g = tab.state.nodeEls[block.id];
         const rect = g.querySelector("rect");
         rect.setAttribute("x", block.x); rect.setAttribute("y", block.y);
-        const lines = block.label.split("\n"), lineH = 18;
+        const lines = block._labelLines || String(block.label || block.id).split("\n"), lineH = NODE_LABEL.lineHeight;
         const startY = block.y + block.h / 2 - ((lines.length - 1) * lineH) / 2 + 5;
         g.querySelectorAll("text").forEach((t, i) => {
           t.setAttribute("x", block.x + block.w / 2); t.setAttribute("y", startY + i * lineH);
@@ -1612,6 +1711,18 @@
         document.getElementById("btn-zoom-out").onclick = () => { const t = activeTab(); if (t) zoom(t, 1.18); };
         document.getElementById("btn-fit").onclick = () => { const t = activeTab(); if (t) fit(t); };
         document.getElementById("btn-theme").onclick = toggleTheme;
+        document.getElementById("edge-color").oninput = (e) => {
+          document.documentElement.style.setProperty("--diagram-edge", e.target.value);
+        };
+        document.getElementById("edge-label-color").oninput = (e) => {
+          document.documentElement.style.setProperty("--diagram-edge-label", e.target.value);
+        };
+        document.getElementById("btn-reset-colors").onclick = () => {
+          const root = document.documentElement;
+          root.style.removeProperty("--diagram-edge");
+          root.style.removeProperty("--diagram-edge-label");
+          syncDiagramColorInputs();
+        };
         document.getElementById("btn-audit").onclick = () => {
           const t = activeTab(); if (!t) return;
           const r = t.layout.audit();
@@ -1624,7 +1735,13 @@
           }
         };
         document.getElementById("btn-svg").onclick = exportSVG;
-        document.getElementById("btn-png").onclick = exportPNG;
+        // the aspect dropdown IS the PNG button: picking an option exports,
+        // then the control snaps back to its "↓ PNG" face.
+        document.getElementById("png-aspect").onchange = (e) => {
+          if (!e.target.value) return;
+          exportPNG();
+          e.target.value = "";
+        };
         document.getElementById("panel-close").onclick = closePanel;
         document.getElementById("panel-backdrop").onclick = closePanel;
         const helpModal = document.getElementById("help-modal");
@@ -1868,9 +1985,17 @@
       // survives reloads via localStorage (falls back to in-memory if storage
       // is unavailable, e.g. file:// in some browsers).
       const THEME_KEY = "interactive-diagram-theme";
+      function syncDiagramColorInputs() {
+        const root = document.documentElement, style = getComputedStyle(root);
+        document.getElementById("edge-color").value = root.style.getPropertyValue("--diagram-edge").trim()
+          || style.getPropertyValue("--edge").trim() || "#475569";
+        document.getElementById("edge-label-color").value = root.style.getPropertyValue("--diagram-edge-label").trim()
+          || style.getPropertyValue("--fg-muted").trim() || "#64748b";
+      }
       function applyTheme(theme) {
         document.documentElement.setAttribute("data-theme", theme);
         document.getElementById("btn-theme").textContent = theme === "dark" ? "◑ 淺色" : "◐ 深色";
+        syncDiagramColorInputs();
         try { localStorage.setItem(THEME_KEY, theme); } catch (_) {}
       }
       function loadTheme() {
@@ -1889,6 +2014,32 @@
       // === EXPORT ==========================================================
       // Acts on the ACTIVE tab's <svg>.
       // =====================================================================
+      const EXPORT_STYLE_PROPERTIES = [
+        "fill", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap",
+        "stroke-linejoin", "opacity", "font-family", "font-size", "font-weight",
+        "text-anchor", "letter-spacing", "filter", "visibility", "display",
+      ];
+      function inlineComputedStyles(source, clone) {
+        const sources = [source, ...source.querySelectorAll("*")];
+        const copies = [clone, ...clone.querySelectorAll("*")];
+        sources.forEach((node, index) => {
+          const target = copies[index]; if (!target) return;
+          const style = getComputedStyle(node);
+          EXPORT_STYLE_PROPERTIES.forEach((property) => {
+            const value = style.getPropertyValue(property);
+            if (!value) return;
+            target.style.setProperty(property, value);
+          });
+        });
+      }
+      function exportBackground(clone, viewBox, color) {
+        const background = svgEl("rect", {
+          x: viewBox.x, y: viewBox.y, width: viewBox.w, height: viewBox.h,
+          fill: color, "data-export-background": "true",
+        });
+        const defs = clone.querySelector("defs");
+        clone.insertBefore(background, defs ? defs.nextSibling : clone.firstChild);
+      }
       function serializedSVG() {
         const tab = activeTab();
         const clone = tab.svg.cloneNode(true);
@@ -1901,8 +2052,11 @@
         clone.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
         clone.setAttribute("width", vb.w);
         clone.setAttribute("height", vb.h);
-        // inline the resolved CSS variables so the export is portable
         const cs = getComputedStyle(document.documentElement);
+        // A data-URI SVG does not inherit document CSS. Inline presentation
+        // styles and add an opaque theme background before serialization.
+        inlineComputedStyles(tab.svg, clone);
+        exportBackground(clone, vb, cs.getPropertyValue("--bg").trim() || "#fff");
         let xml = new XMLSerializer().serializeToString(clone);
         xml = xml.replace(/var\((--[\w-]+)\)/g, (_, v) => cs.getPropertyValue(v).trim() || "#000");
         return `<?xml version="1.0"?>\n${xml}`;
@@ -1912,18 +2066,40 @@
         a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
       }
       function exportSVG() { download(new Blob([serializedSVG()], { type: "image/svg+xml" }), `${App.activeTabId}.svg`); }
+      const PNG_PRESETS = {
+        original: { width: null, height: null, suffix: "" },
+        wide: { width: 1920, height: 1080, suffix: "-16x9" },
+        standard: { width: 1600, height: 1200, suffix: "-4x3" },
+      };
+      function pngFrame(tab) {
+        const preset = PNG_PRESETS[document.getElementById("png-aspect").value] || PNG_PRESETS.original;
+        return {
+          width: preset.width || Math.round(tab.state.vb.w * 2),
+          height: preset.height || Math.round(tab.state.vb.h * 2),
+          suffix: preset.suffix,
+        };
+      }
+      function drawContained(ctx, image, width, height) {
+        if (!image.width || !image.height) return;
+        const scale = Math.min(width / image.width, height / image.height);
+        const drawWidth = image.width * scale, drawHeight = image.height * scale;
+        ctx.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+      }
       function exportPNG() {
         const tab = activeTab();
         const xml = serializedSVG();
+        // capture the frame NOW — the dropdown resets to its "↓ PNG" face
+        // right after this call, before img.onload fires
+        const frame = pngFrame(tab);
         const img = new Image();
         img.onload = () => {
-          const scale = 2, c = document.createElement("canvas");
-          c.width = tab.state.vb.w * scale; c.height = tab.state.vb.h * scale;
+          const c = document.createElement("canvas");
+          c.width = frame.width; c.height = frame.height;
           const ctx = c.getContext("2d");
           ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
           ctx.fillRect(0, 0, c.width, c.height);
-          ctx.drawImage(img, 0, 0, c.width, c.height);
-          c.toBlob((b) => download(b, `${App.activeTabId}.png`));
+          drawContained(ctx, img, c.width, c.height);
+          c.toBlob((b) => { if (b) download(b, `${App.activeTabId}${frame.suffix}.png`); });
         };
         img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(xml)));
       }
@@ -1947,7 +2123,8 @@
           const sub = `font-size:10px;font-weight:600;color:var(--fg-muted);text-transform:uppercase;letter-spacing:.05em;margin:8px 0 5px`;
           const styles = [["sync", false, false], ["stream", false, false], ["return", true, false], ["internal", false, true]]
             .map(([k, dashed, loop]) => {
-              const color = k === "stream" ? "var(--seq-accent)" : k === "return" ? "var(--seq-gray)" : "var(--seq-slate)";
+              const fallback = k === "stream" ? "var(--seq-accent)" : k === "return" ? "var(--seq-gray)" : "var(--seq-slate)";
+              const color = `var(--diagram-edge, ${fallback})`;
               const dash = dashed ? "5 4" : "";
               return `<div class="legend-item">${swatch(color, dash, loop)}${MSG_STYLE_LABELS[k]}</div>`;
             }).join("");
@@ -1975,6 +2152,7 @@
           // containers (and edges) are OPTIONAL — a tab may omit them entirely
           // or mix zoned and free blocks; free blocks pack as standalone units.
           tab.blocks = def.blocks || []; tab.containers = def.containers || []; tab.edges = def.edges || [];
+          fitBlockLabels(tab.blocks);
           const known = new Set(tab.containers.map((s) => s.id));
           tab.blocks.forEach((b) => {
             if (b.container && !known.has(b.container))

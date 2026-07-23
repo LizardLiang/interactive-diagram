@@ -73,7 +73,10 @@ Once installed, just ask your agent to "draw a diagram of …" / "visualize this
   - **Click** a node → details panel (description, tech, responsibilities).
   - **Drag** nodes, **drag** the canvas to pan, **scroll/pinch** to zoom, **Fit** to frame.
 - **Dark mode** — Tokyo Night palette, one-attribute theme flip, remembered across reloads.
-- **Export** — download the current view as **SVG** or **PNG** (2× for crispness).
+- **Readable long labels** — node labels wrap automatically and grow their boxes before the layout guard packs the diagram.
+- **Presentation colors** — choose high-contrast connection-line and edge-label colors from the toolbar, or reset to the active theme defaults.
+- **Reliable export** — SVG/PNG snapshots inline their computed styles and include an opaque theme background, so connectors and text survive standalone rendering.
+- **PNG aspect presets** — export the original diagram at 2×, or place it without distortion in a fixed **1920×1080 (16:9)** or **1600×1200 (4:3)** frame.
 - **Localized chrome** — the built-in UI ships in Traditional Chinese (zh-TW); diagram content is whatever you author.
 
 ## How it works
