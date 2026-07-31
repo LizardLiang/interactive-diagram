@@ -99,14 +99,17 @@ resolves collisions:
 | Category | What it is | Resolver |
 |----------|------------|----------|
 | `block`     | block rectangles / diamonds | `resolveBlocks()` — BFS pin-settled push-apart **within each zone**, ≥40px clearance |
-| `label`     | text riding on arrow (edge) lines | `resolveLabels()` — slides each label along its own curve to a spot the audit accepts |
+| `label`     | text riding on arrow (edge) lines | `run()` widens the gap between side-by-side connected blocks until the label pill fits **on** its line (corridor widening); `resolveLabels()` then slides each label along its own curve to a spot the audit accepts |
 | `title`     | container captions | `titleBox()` places each in the reserved caption strip of its own zone |
 | `container` | **zones** grouping blocks | `packUnits()` — zones (and free blocks) pack as rigid units from the **top-left corner**, never overlapping |
 
 The resolver is **two-level**: blocks settle inside their zone first, then whole
 zones — plus every free block — pack as rigid units with ≥48px zone-to-zone
 clearance, and the finished layout is normalized so its bounding box starts at
-the top-left origin `(60, 60)`. Containers are **optional**: omit the
+the top-left origin `(60, 60)`. At both levels a **label-corridor pass** widens
+the facing gap of horizontally-adjacent connected blocks until the edge's label
+fits on the line between them — the layout makes room for the label instead of
+letting it drift away from its edge. Containers are **optional**: omit the
 `containers` array (or leave a block's `container` unset) and those blocks pack
 as standalone units alongside the zones. A block naming an unknown container id
 logs a `console.warn` and is treated as free.
@@ -140,6 +143,9 @@ The skeleton's `<script>` is already organized into commented sections — `CONF
 ```js
 const app = {
   title: "Diagram",
+  typeLabels: { queue: "Serilog Enricher" },  // OPTIONAL — override legend/badge
+  // wording per block type; put custom legend text here (config survives
+  // upgrades), never by editing the TYPE_LABELS constant in the runtime
   tabs: [
     {
       id: "system",                       // unique; used as cache key + svg/png filename
@@ -169,10 +175,12 @@ const app = {
         // curve direction is auto-derived from each port's face so the
         // arrowhead always points into the target block; bendDir: 1 | -1 is an
         // override, only needed to bow parallel edges apart from each other
-        // when no bendDir is set, the curve also auto-routes around any block
-        // or zone that sits between the endpoints (grows/flips its bow just
-        // enough to clear it); an explicit bendDir always wins over this and
-        // is never auto-adjusted
+        // when no bendDir is set, the curve also auto-routes around any block,
+        // zone, or zone-title pill that sits between the endpoints (grows/flips
+        // its bow just enough to clear it); a zone the chord MUST cross anyway
+        // (a band/lane lying strictly between the endpoints) is crossed with a
+        // calm minimal bow instead of being fought; an explicit bendDir always
+        // wins over this and is never auto-adjusted
       ],
 
       // For type: "sequence" tabs, use `actors` + `messages` instead of
