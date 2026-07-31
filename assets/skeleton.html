@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
-    <meta name="generator" content="interactive-diagram v1.10.0" />
+    <meta name="generator" content="interactive-diagram v1.11.0" />
     <title>Interactive Diagram — Skeleton</title>
     <!--
       ============================================================================
@@ -180,7 +180,7 @@
       #panel-backdrop { display: none; position: fixed; inset: 0; background: var(--overlay); z-index: 200; }
       #panel-backdrop.open { display: block; }
       #side-panel {
-        position: fixed; top: 0; right: -440px; width: 420px; height: 100vh;
+        position: fixed; top: 0; right: -700px; width: 680px; max-width: calc(100vw - 40px); height: 100vh;
         background: var(--panel-bg); border-left: 1px solid var(--border);
         box-shadow: -8px 0 32px var(--shadow); z-index: 201;
         transition: right 0.28s cubic-bezier(0.4, 0, 0.2, 1);
@@ -198,7 +198,14 @@
         padding: 3px 9px; border-radius: 20px; margin-bottom: 10px;
       }
       #panel-title { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
-      #panel-desc { font-size: 14px; color: var(--fg-muted); line-height: 1.7; margin-bottom: 18px; white-space: pre-wrap; }
+      #panel-desc { font-size: 14px; color: var(--fg); line-height: 1.7; margin-bottom: 18px; white-space: pre-wrap; }
+      #panel-code {
+        display: none; background: var(--bg); border: 1px solid var(--border);
+        border-radius: 8px; padding: 12px 14px; margin-bottom: 18px;
+        font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+        font-size: 12px; line-height: 1.65; color: var(--fg);
+        white-space: pre; overflow-x: auto; user-select: text;
+      }
       .panel-section { margin-bottom: 16px; }
       .panel-section h4 {
         font-size: 11px; font-weight: 600; color: var(--fg-muted);
@@ -273,6 +280,7 @@
       <div id="panel-type-badge"></div>
       <div id="panel-title"></div>
       <div id="panel-desc"></div>
+      <pre id="panel-code"></pre>
       <div id="panel-tech-section" class="panel-section"><h4>技術</h4><div id="panel-tech"></div></div>
       <div id="panel-resp-section" class="panel-section"><h4>職責</h4><div id="panel-resp"></div></div>
     </div>
@@ -326,6 +334,9 @@
       //                  `label` keeps authored \n as hard breaks; long lines
       //                  (English or CJK) wrap automatically and the block
       //                  grows to fit BEFORE layout runs — no manual sizing.
+      //                  optional `code` — a verbatim monospace code block
+      //                  rendered in the side panel below the description
+      //                  (selectable text, horizontal scroll; omit to hide).
       //   edges[]      — connections between blocks.
       const app = {
         title: "圖表",
@@ -1971,6 +1982,9 @@
         badge.style.background = c.fill; badge.style.color = c.stroke;
         document.getElementById("panel-title").textContent = block.label.replace(/\n/g, " ");
         document.getElementById("panel-desc").textContent = block.description || "";
+        const codeEl = document.getElementById("panel-code");
+        codeEl.textContent = block.code || "";
+        codeEl.style.display = block.code ? "block" : "none";
         document.getElementById("panel-tech").innerHTML = (block.tech || []).map((t) => `<span class="panel-tag">${t}</span>`).join("");
         document.getElementById("panel-resp").innerHTML = (block.responsibilities || []).map((r) => `<div class="panel-resp-item">${r}</div>`).join("");
         document.getElementById("side-panel").classList.add("open");

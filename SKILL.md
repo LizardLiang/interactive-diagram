@@ -155,10 +155,12 @@ const app = {
       ],
 
       blocks: [                            // the nodes
-        { id, container, label, type, x, y, w, h, description, tech, responsibilities },
+        { id, container, label, type, x, y, w, h, description, code, tech, responsibilities },
         // container = id of the zone this block belongs to; omit it (or omit
         // `containers` entirely) and the block packs as a FREE unit
         // type drives the color (client / http / worker / infra / queue / db / external)
+        // code (optional) = a verbatim monospace code block shown in the side
+        // panel below the description (selectable, horizontal scroll)
       ],
 
       edges: [
