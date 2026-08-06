@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
-    <meta name="generator" content="interactive-diagram v1.10.0" />
+    <meta name="generator" content="interactive-diagram v1.13.0" />
     <title>PulsePay Architecture — Interactive Diagram</title>
     <!--
       ============================================================================
@@ -37,7 +37,13 @@
       layout.run() is a two-level resolver: it settles blocks WITHIN each zone,
       then packs whole zones (and free blocks) as rigid units from the top-left
       corner, so zones never overlap each other and no block sits on a foreign
-      zone. layout.audit() proves no conflict remains and logs a table of any it
+      zone. At both levels it also widens the gap between side-by-side
+      CONNECTED blocks until the edge's label pill fits ON its line — the
+      layout makes room rather than letting the label drift off its edge.
+      The standing block clearance (GAP.block) is DERIVED from that same
+      rule, so a vertically stacked pair likewise leaves line visible above
+      and below its label instead of letting the pill swallow the gap.
+      layout.audit() proves no conflict remains and logs a table of any it
       could not fix. Containment (a block living INSIDE its own zone, a title
       captioning its own zone, a band crossing a lane in a grid) is by design
       and is NOT reported as a collision — see POLICY.isConflict.
@@ -180,7 +186,7 @@
       #panel-backdrop { display: none; position: fixed; inset: 0; background: var(--overlay); z-index: 200; }
       #panel-backdrop.open { display: block; }
       #side-panel {
-        position: fixed; top: 0; right: -440px; width: 420px; height: 100vh;
+        position: fixed; top: 0; right: -700px; width: 680px; max-width: calc(100vw - 40px); height: 100vh;
         background: var(--panel-bg); border-left: 1px solid var(--border);
         box-shadow: -8px 0 32px var(--shadow); z-index: 201;
         transition: right 0.28s cubic-bezier(0.4, 0, 0.2, 1);
@@ -198,7 +204,14 @@
         padding: 3px 9px; border-radius: 20px; margin-bottom: 10px;
       }
       #panel-title { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
-      #panel-desc { font-size: 14px; color: var(--fg-muted); line-height: 1.7; margin-bottom: 18px; white-space: pre-wrap; }
+      #panel-desc { font-size: 14px; color: var(--fg); line-height: 1.7; margin-bottom: 18px; white-space: pre-wrap; }
+      #panel-code {
+        display: none; background: var(--bg); border: 1px solid var(--border);
+        border-radius: 8px; padding: 12px 14px; margin-bottom: 18px;
+        font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+        font-size: 12px; line-height: 1.65; color: var(--fg);
+        white-space: pre; overflow-x: auto; user-select: text;
+      }
       .panel-section { margin-bottom: 16px; }
       .panel-section h4 {
         font-size: 11px; font-weight: 600; color: var(--fg-muted);
@@ -273,6 +286,7 @@
       <div id="panel-type-badge"></div>
       <div id="panel-title"></div>
       <div id="panel-desc"></div>
+      <pre id="panel-code"></pre>
       <div id="panel-tech-section" class="panel-section"><h4>技術</h4><div id="panel-tech"></div></div>
       <div id="panel-resp-section" class="panel-section"><h4>職責</h4><div id="panel-resp"></div></div>
     </div>
@@ -326,7 +340,15 @@
       //                  `label` keeps authored \n as hard breaks; long lines
       //                  (English or CJK) wrap automatically and the block
       //                  grows to fit BEFORE layout runs — no manual sizing.
+      //                  optional `code` — a verbatim monospace code block
+      //                  rendered in the side panel below the description
+      //                  (selectable text, horizontal scroll; omit to hide).
       //   edges[]      — connections between blocks.
+      //
+      // app.typeLabels — OPTIONAL {type: wording} overrides for the legend and
+      // panel badge (e.g. { queue: "Serilog Enricher" }). Put custom legend
+      // wording HERE, not by editing TYPE_LABELS below: only the config object
+      // survives scripts/upgrade-diagram.mjs re-hosting.
       const app = {
         title: "PulsePay — 即時詐欺偵測平台",
         tabs: [
@@ -574,6 +596,19 @@
       }
       function fitBlockLabels(blocks) { blocks.forEach(fitBlockLabel); }
 
+      // --- edge-label geometry (shared by LAYOUT and RENDER) ---------------
+      // An edge label rides its own line on a pill LABEL_H tall. These three
+      // numbers are the single source of truth: the layout derives its block
+      // clearance from them (GAP.block below) and renderEdge draws the pill
+      // from them, so spacing and drawing can never disagree.
+      const LABEL_H = 19;        // pill height
+      const EDGE_LABEL_FS = 11;  // pill text size (measureText models this)
+      // Visible line kept on EACH side of a pill. A label is only readable as
+      // "belonging to" a line when the line still shows on both sides of it —
+      // a pill that fills the whole gap between two blocks leaves nothing to
+      // trace back to, which is exactly the "which line is this on?" failure.
+      const LINE_STUB = 16;
+
       // =====================================================================
       // === LAYOUT GUARD ====================================================
       // makeLayout(tab) builds a per-tab guard: distance / overlap checking
@@ -605,6 +640,12 @@
           const lines = String(str).split("\n").length;
           return { w: measureText(str, fontSize), h: lines * lineH };
         }
+        // width of an edge label's pill. renderEdge sizes the real <rect>
+        // from THIS helper, so the corridor widening below and the drawn
+        // label can never disagree about how much room the pill needs.
+        // 16px padding (not 14): the pill text renders semi-bold, which the
+        // weight-agnostic glyph heuristic slightly under-measures.
+        function edgeLabelW(edge) { return measureText(edge.label, EDGE_LABEL_FS) + 16; }
 
         // Penetration depth of two boxes inflated by `gap`. Positive on both
         // axes ⇒ they overlap (or sit closer than `gap`).
@@ -624,12 +665,19 @@
         }
 
         // --- minimum clearance (px) between each category pair ------------
+        // GAP.block is DERIVED from the edge-label pill, not picked: a
+        // vertically stacked, connected pair must leave room for the pill
+        // PLUS a visible line stub above and below it, or the label reads as
+        // floating between two boxes with no line to attach it to. That makes
+        // the gap a label-legibility constant, not a taste one — change
+        // LABEL_H / LINE_STUB and the spacing follows.
+        const MIXED_GAP = 8;
         const GAP = {
-          block: 40,     // SKILL.md hard rule: ≥40px between blocks
+          block: LABEL_H + MIXED_GAP * 2 + LINE_STUB * 2, // 67px between blocks
           label: 4,      // edge labels vs each other
           title: 8,
           container: 48, // zone-to-zone clearance (band×lane crossing exempt)
-          mixed: 8,      // any cross-category pair not listed
+          mixed: MIXED_GAP, // any cross-category pair not listed
         };
         // Conflict POLICY: which pairs MUST NOT overlap. Identity-aware —
         // `a` / `b` are registry entries ({ kind, id }). A container is a
@@ -905,6 +953,62 @@
           units.forEach((u) => { if (u.box) moveUnit(u, dx, dy); });
         }
 
+        // --- label corridors: make room ON the line for edge labels --------
+        // A label rides its line at the chord midpoint. When two connected
+        // blocks sit side by side, the resolver's 40px clearance is far
+        // narrower than a typical label pill, so the label search would
+        // escape far off its line — the label ends up visually detached.
+        // Instead, widen the facing gap so the pill fits ON the line with
+        // line still SHOWING on both sides of it: labelW + 2×GAP.mixed (the
+        // audit clearance) + 2×LINE_STUB (the visible line).
+        // Only HORIZONTALLY-arranged pairs (portN's own rule) whose y-spans
+        // overlap need this pass. A vertical pair is already covered by
+        // construction: GAP.block is derived as pill height + the same two
+        // terms, so a stacked pair always shows line above and below its
+        // pill. Only sideways is the pill wider than the standing gap.
+        // The widening is a rigid half-plane shove — every item whose center sits right of the
+        // corridor midpoint shifts right by the shortfall — which cannot
+        // create a new overlap (shifted items keep their relative
+        // positions; unshifted→shifted pairs only gain distance) and later
+        // corridors can only grow earlier ones, so one pass settles all.
+        function corridorNeed(a, b, edge) {
+          if (Math.abs(cx(a) - cx(b)) < Math.abs(cy(a) - cy(b))) return null; // vertical pair
+          if (T(a) >= B(b) || T(b) >= B(a)) return null; // no shared row — label has diagonal room
+          const [l, r] = cx(a) <= cx(b) ? [a, b] : [b, a];
+          const gap = L(r) - R(l);
+          const needed = edgeLabelW(edge) + GAP.mixed * 2 + LINE_STUB * 2;
+          if (gap <= 0 || gap >= needed) return null; // overlapping pairs are the resolver's job
+          return { mid: (R(l) + L(r)) / 2, delta: needed - gap };
+        }
+        // level 1: corridors between blocks of the SAME unit (shift members)
+        function widenBlockCorridors(unit) {
+          if (unit.members.length < 2) return;
+          const member = (id) => unit.members.find((b) => b.id === id);
+          (tab.edges || []).forEach((edge) => {
+            if (!edge.label) return;
+            const a = member(edge.from), b = member(edge.to);
+            if (!a || !b || a === b) return;
+            const need = corridorNeed(a, b, edge);
+            if (!need) return;
+            unit.members.forEach((m) => { if (cx(m) > need.mid) m.x += need.delta; });
+          });
+        }
+        // level 2: corridors between blocks of DIFFERENT units (shift whole
+        // units rigidly — same half-plane argument lifted to unit boxes)
+        function widenUnitCorridors(units) {
+          const unitOf = (id) => units.find((u) => u.members.some((b) => b.id === id));
+          (tab.edges || []).forEach((edge) => {
+            if (!edge.label) return;
+            const ua = unitOf(edge.from), ub = unitOf(edge.to);
+            if (!ua || !ub || ua === ub) return;
+            const a = ua.members.find((b) => b.id === edge.from);
+            const b = ub.members.find((b) => b.id === edge.to);
+            const need = corridorNeed(a, b, edge);
+            if (!need) return;
+            units.forEach((u) => { if (u.box && cx(u.box) > need.mid) moveUnit(u, need.delta, 0); });
+          });
+        }
+
         // --- grow containers to contain their member blocks ---------------
         // band → fixed height, spans full diagram width, y/h hug member rows
         // lane → fixed width,  spans full diagram height, x/w hug member cols
@@ -1081,8 +1185,10 @@
         function run() {
           const units = groupUnits();
           units.forEach((u) => resolveBlocks(u.members)); // level 1: within each zone
+          units.forEach(widenBlockCorridors);             // room for labels inside a zone
           units.forEach((u) => { u.box = unitBox(u); });
           packUnits(units);                               // level 2: zones as rigid units
+          widenUnitCorridors(units);                      // room for labels across zones
           normalizeOrigin(units);                         // top-left corner contract
           fitContainers();
           placeTitles();
@@ -1090,7 +1196,7 @@
 
         return {
           // primitives (exposed for custom layouts / tests)
-          measureText, textBox, penetration, overlaps, contains, titleBox,
+          measureText, textBox, edgeLabelW, penetration, overlaps, contains, titleBox,
           // policy + registry
           POLICY: { GAP, isConflict, gapFor }, register, clear, reg,
           // resolvers + audit
@@ -1173,12 +1279,29 @@
       // edgeGeom (below) only takes this branch directly when the edge has an
       // authored bendDir; un-authored edges route through avoidControl, which
       // starts from this same bow and grows/flips it just enough to clear any
-      // block or zone sitting between the endpoints (auto-avoidance) — falling
+      // block, zone, or zone-title pill sitting between the endpoints — falling
       // back to this exact curve whenever nothing is in the way (R5, unchanged).
+      // Zones the chord must cross regardless (a band/lane strictly between
+      // the ports) are excluded from avoidance — see unavoidableZone below.
       const BOW_OFFSET = 28;
-      const MAX_BOW = 220;      // cap so the curve never balloons off-canvas
+      // 420, not the old 220: the search always takes the SMALLEST offset that
+      // clears, so raising the cap never widens a curve that already had a
+      // calm route — it only rescues the ones that used to give up and render
+      // INVISIBLE underneath a block. A wide arc beats a hidden line.
+      const MAX_BOW = 420;      // cap so the curve never balloons off-canvas
       const BOW_STEP = 16;      // offset search granularity
       const CLEAR_MARGIN = 12;  // px the curve must stay outside an obstacle
+      // Where along the chord the control point sits. A control point pinned
+      // at the midpoint can only produce a SYMMETRIC bow — so an obstacle
+      // parked near one endpoint (a block sitting just off the target, the
+      // classic "the line vanishes under that box" case) has no symmetric
+      // arc that clears it within MAX_BOW, and the search used to fall back
+      // to a curve that still ran through the block. Sliding the control
+      // point toward either end skews the arc so it swings wide EARLY or
+      // LATE, which is what actually gets around such a block. Midpoint is
+      // tried first at every offset, so a curve that has no obstacle keeps
+      // exactly today's shape.
+      const CHORD_SKEWS = [0.5, 0.35, 0.65, 0.2, 0.8];
       // unit perpendicular of chord p1->p2 (rotate the chord vector 90°); null
       // for coincident points (degenerate chord).
       function perpUnit(p1, p2) {
@@ -1226,7 +1349,9 @@
       // true if no interior sample of the curve lands inside `box` inflated by
       // `margin`; endpoints (t=0/1) are skipped so a port sitting flush on a
       // neighboring face never self-trips.
-      function curveClears(p1, c, p2, box, margin, SAMPLES = 16) {
+      // 24 samples, not 16: edges render UNDER blocks, so a sample gap wide
+      // enough to step over a narrow block hides that line completely.
+      function curveClears(p1, c, p2, box, margin, SAMPLES = 24) {
         for (let i = 1; i < SAMPLES; i++) {
           if (pointInBox(bezierAt(p1, c, p2, i / SAMPLES), box, margin)) return false;
         }
@@ -1235,7 +1360,7 @@
       // worst-case depth (px) any interior curve sample sits inside the
       // inflated box; 0 when the curve already clears it. Used only as a
       // best-effort tiebreak when no offset fully clears within MAX_BOW.
-      function curvePenetration(p1, c, p2, box, margin, SAMPLES = 16) {
+      function curvePenetration(p1, c, p2, box, margin, SAMPLES = 24) {
         const bx0 = box.x - margin, bx1 = box.x + box.w + margin;
         const by0 = box.y - margin, by1 = box.y + box.h + margin;
         let maxDepth = 0;
@@ -1247,21 +1372,42 @@
         }
         return maxDepth;
       }
-      // obstacles for `edge`: every sibling block except its own from/to, plus
-      // every container EXCEPT one that already holds the from or to block (an
-      // edge legitimately starting/ending inside a zone must not be forced to
-      // avoid that zone's own border).
-      function edgeObstacles(tab, edge) {
+      // a zone the chord MUST cross no matter the bow: a full-width band whose
+      // y-span strictly separates the two ports (or a full-height lane whose
+      // x-span separates them). No perpendicular offset can ever clear such a
+      // zone, so keeping it in the obstacle set used to fail BOTH search
+      // sides and force the max-bow fallback — a huge balloon chosen by
+      // irrelevant zone penetration while the curve still grazed real blocks.
+      function unavoidableZone(s, box, p1, p2) {
+        if (s.orient === "band")
+          return (p1.y < box.y && p2.y > box.y + box.h) || (p2.y < box.y && p1.y > box.y + box.h);
+        if (s.orient === "lane")
+          return (p1.x < box.x && p2.x > box.x + box.w) || (p2.x < box.x && p1.x > box.x + box.w);
+        return false;
+      }
+      // obstacles for `edge`: every sibling block except its own from/to, every
+      // container title pill (small and always avoidable — long edges must not
+      // run through captions, own zone's included), plus every container EXCEPT
+      // one that already holds the from or to block (an edge legitimately
+      // starting/ending inside a zone must not be forced to avoid that zone's
+      // own border) and except zones the chord must cross anyway (above).
+      function edgeObstacles(tab, edge, p1, p2) {
         const boxes = blocksExcept(tab, edge.from, edge.to);
         const fromC = tab.blocks.find((b) => b.id === edge.from)?.container;
         const toC = tab.blocks.find((b) => b.id === edge.to)?.container;
         (tab.containers || []).forEach((s) => {
+          // titles carry a smaller clear margin (4px) than blocks: placeTitles
+          // only guarantees 8px title↔block clearance, so demanding the full
+          // CLEAR_MARGIN (12px) around a title sitting legally next to a port
+          // would poison every candidate and force the max-bow fallback.
+          boxes.push(Object.assign(tab.layout.titleBox(s, 11), { _margin: 4 }));
           if (s.id === fromC || s.id === toC) return; // don't avoid own zone
           const box = containerBox(tab, s.id);
-          if (box) boxes.push(box);
+          if (box && !unavoidableZone(s, box, p1, p2)) boxes.push(box);
         });
         return boxes;
       }
+      const obstacleMargin = (b) => (b._margin != null ? b._margin : CLEAR_MARGIN);
       // un-authored control point that auto-routes around obstacles: start
       // from today's arrowhead-bow (edgeControl); if it already clears every
       // obstacle, return it unchanged (R5). Otherwise grow the offset on each
@@ -1271,31 +1417,42 @@
       // penetration at the cap (best-effort, R3).
       function avoidControl(tab, edge, p1, p2) {
         const base = edgeControl(p1, p2, p1.normal, p2.normal, null);
-        const obstacles = edgeObstacles(tab, edge);
-        if (obstacles.every((b) => curveClears(p1, base, p2, b, CLEAR_MARGIN))) return base;
+        const obstacles = edgeObstacles(tab, edge, p1, p2);
+        if (obstacles.every((b) => curveClears(p1, base, p2, b, obstacleMargin(b)))) return base;
 
-        const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
         const u = perpUnit(p1, p2);
         if (!u) return base; // degenerate chord — nothing to search
         const sign = preferredSign(u, p2.normal);
-        const mkC = (off) => ({ x: mx + u.x * off, y: my + u.y * off });
+        // control point: `s` along the chord, then `off` perpendicular to it
+        const mkC = (off, s) => ({
+          x: p1.x + (p2.x - p1.x) * s + u.x * off,
+          y: p1.y + (p2.y - p1.y) * s + u.y * off,
+        });
+        const clearsAll = (c) => obstacles.every((b) => curveClears(p1, c, p2, b, obstacleMargin(b)));
+        const worstPen = (c) => Math.max(...obstacles.map((b) => curvePenetration(p1, c, p2, b, obstacleMargin(b))));
 
         let winner = null, winnerOff = Infinity;
         let fallback = null, fallbackPen = Infinity;
         for (const side of [sign, -sign]) {
           let cleared = null, clearedOff = Infinity;
-          for (let off = BOW_OFFSET; off <= MAX_BOW; off += BOW_STEP) {
-            const c = mkC(side * off);
-            if (obstacles.every((b) => curveClears(p1, c, p2, b, CLEAR_MARGIN))) {
-              cleared = c; clearedOff = off; break;
+          // smallest offset wins, so the calmest curve that clears is taken;
+          // within one offset, midpoint (CHORD_SKEWS[0]) is preferred.
+          for (let off = BOW_OFFSET; off <= MAX_BOW && !cleared; off += BOW_STEP) {
+            for (const s of CHORD_SKEWS) {
+              const c = mkC(side * off, s);
+              if (clearsAll(c)) { cleared = c; clearedOff = off; break; }
             }
           }
           if (cleared) {
             if (clearedOff < winnerOff) { winnerOff = clearedOff; winner = cleared; }
           } else {
-            const capC = mkC(side * MAX_BOW);
-            const pen = Math.max(...obstacles.map((b) => curvePenetration(p1, capC, p2, b, CLEAR_MARGIN)));
-            if (pen < fallbackPen) { fallbackPen = pen; fallback = capC; }
+            // nothing cleared this side — keep the least-penetrating capped
+            // curve, skews included (a skewed cap often grazes far less).
+            for (const s of CHORD_SKEWS) {
+              const capC = mkC(side * MAX_BOW, s);
+              const pen = worstPen(capC);
+              if (pen < fallbackPen) { fallbackPen = pen; fallback = capC; }
+            }
           }
         }
         return winner || fallback || base;
@@ -1303,7 +1460,8 @@
       // {p1, p2, c} for an edge from the CURRENT block positions — single
       // source of truth so render/drag/label/hover never disagree on the curve.
       // An authored bendDir always wins (edgeControl, unchanged); otherwise the
-      // curve auto-routes around any block/zone sitting between the endpoints.
+      // curve auto-routes around any avoidable block/zone/title between the
+      // endpoints (zones the chord must cross anyway are not fought).
       function edgeGeom(tab, edge) {
         const p1 = portN(tab, edge.from, edge.to, true), p2 = portN(tab, edge.from, edge.to, false);
         const c = edge.bendDir != null
@@ -1348,15 +1506,27 @@
         let bg = null, txt = null, labelW = 0;
         if (edge.label) {
           const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
-          labelW = tab.layout.measureText(edge.label, 11) + 14;
-          bg = svgEl("rect", { x: mx - labelW / 2, y: my - 11, width: labelW, height: 19, rx: 5, fill: "var(--bg)", opacity: "0.92" });
-          txt = svgEl("text", { x: mx, y: my + 3, "text-anchor": "middle", "font-size": "11", fill: "var(--diagram-edge-label, var(--fg-muted))" });
+          labelW = tab.layout.edgeLabelW(edge);
+          // The pill is opaque and outlined in its OWN line's colour: with
+          // several lines crossing the same corridor, the outline is what
+          // says "this text belongs to THAT line" even before you trace the
+          // stubs either side of it. Text sits at --fg, not --fg-muted —
+          // muted 11px CJK on a pale pill was the unreadable part.
+          bg = svgEl("rect", {
+            x: mx - labelW / 2, y: my - 11, width: labelW, height: LABEL_H, rx: 6,
+            fill: "var(--bg)", stroke: "var(--diagram-edge, var(--edge))",
+            "stroke-width": "1", opacity: "0.97",
+          });
+          txt = svgEl("text", {
+            x: mx, y: my + 3, "text-anchor": "middle", "font-size": String(EDGE_LABEL_FS),
+            "font-weight": "600", fill: "var(--diagram-edge-label, var(--fg))",
+          });
           txt.textContent = edge.label;
           g.appendChild(bg); g.appendChild(txt);
 
           // register the label box with the guard (live get/set on the DOM)
           tab.layout.register("label", `${edge.from}->${edge.to}#${idx}`,
-            () => ({ x: +bg.getAttribute("x"), y: +bg.getAttribute("y"), w: +bg.getAttribute("width"), h: 19 }),
+            () => ({ x: +bg.getAttribute("x"), y: +bg.getAttribute("y"), w: +bg.getAttribute("width"), h: LABEL_H }),
             (box) => {
               bg.setAttribute("x", box.x); bg.setAttribute("y", box.y);
               txt.setAttribute("x", box.x + box.w / 2); txt.setAttribute("y", box.y + 14);
@@ -1808,7 +1978,9 @@
       // A label rides its OWN curve; placeLabels picks the clearest resting
       // point along it, and hover slides it to the cursor without detaching.
       // ---------------------------------------------------------------------
-      const LABEL_H = 19;
+      // LABEL_H / LINE_STUB are declared up by fitBlockLabels — the layout
+      // derives its block clearance from the same numbers this pass places
+      // labels with.
       // sum of overlap "area" of `box` against every obstacle (0 ⇒ clear).
       // Each obstacle may carry its own audit clearance in `_gap` (blocks and
       // titles need GAP.mixed = 8; sibling labels need GAP.label = 4) so the
@@ -1993,6 +2165,9 @@
         badge.style.background = c.fill; badge.style.color = c.stroke;
         document.getElementById("panel-title").textContent = block.label.replace(/\n/g, " ");
         document.getElementById("panel-desc").textContent = block.description || "";
+        const codeEl = document.getElementById("panel-code");
+        codeEl.textContent = block.code || "";
+        codeEl.style.display = block.code ? "block" : "none";
         document.getElementById("panel-tech").innerHTML = (block.tech || []).map((t) => `<span class="panel-tag">${t}</span>`).join("");
         document.getElementById("panel-resp").innerHTML = (block.responsibilities || []).map((r) => `<div class="panel-resp-item">${r}</div>`).join("");
         document.getElementById("side-panel").classList.add("open");
@@ -2294,6 +2469,7 @@
       // === INIT ============================================================
       // =====================================================================
       function init() {
+        Object.assign(TYPE_LABELS, app.typeLabels || {}); // config-authored legend wording
         document.getElementById("app-title").textContent = app.title || "Diagram";
         loadTheme();                 // restore the persisted color schema (global)
         buildTabStrip();             // only visible when app.tabs.length > 1

@@ -98,15 +98,27 @@ resolves collisions:
 
 | Category | What it is | Resolver |
 |----------|------------|----------|
-| `block`     | block rectangles / diamonds | `resolveBlocks()` — BFS pin-settled push-apart **within each zone**, ≥40px clearance |
-| `label`     | text riding on arrow (edge) lines | `resolveLabels()` — slides each label along its own curve to a spot the audit accepts |
+| `block`     | block rectangles / diamonds | `resolveBlocks()` — BFS pin-settled push-apart **within each zone**, ≥67px clearance |
+| `label`     | text riding on arrow (edge) lines | `run()` widens the gap between side-by-side connected blocks until the label pill fits **on** its line with line still showing either side (corridor widening); `resolveLabels()` then slides each label along its own curve to a spot the audit accepts |
 | `title`     | container captions | `titleBox()` places each in the reserved caption strip of its own zone |
 | `container` | **zones** grouping blocks | `packUnits()` — zones (and free blocks) pack as rigid units from the **top-left corner**, never overlapping |
 
 The resolver is **two-level**: blocks settle inside their zone first, then whole
 zones — plus every free block — pack as rigid units with ≥48px zone-to-zone
 clearance, and the finished layout is normalized so its bounding box starts at
-the top-left origin `(60, 60)`. Containers are **optional**: omit the
+the top-left origin `(60, 60)`. At both levels a **label-corridor pass** widens
+the facing gap of horizontally-adjacent connected blocks until the edge's label
+fits on the line between them — the layout makes room for the label instead of
+letting it drift away from its edge.
+
+The 67px block clearance is **derived, not chosen**: an edge label rides a pill
+`LABEL_H` (19px) tall, and a label only reads as belonging to a line when the
+line is still visible on *both* sides of the pill. So the gap is
+`LABEL_H + 2×GAP.mixed + 2×LINE_STUB` — pill, audit clearance, and a 16px
+visible stub each side. That covers vertically stacked pairs by construction;
+the corridor pass applies the same formula sideways, where the pill is much
+wider than the standing gap. Change `LABEL_H` / `LINE_STUB` in the template and
+the spacing follows. Containers are **optional**: omit the
 `containers` array (or leave a block's `container` unset) and those blocks pack
 as standalone units alongside the zones. A block naming an unknown container id
 logs a `console.warn` and is treated as free.
@@ -140,6 +152,9 @@ The skeleton's `<script>` is already organized into commented sections — `CONF
 ```js
 const app = {
   title: "Diagram",
+  typeLabels: { queue: "Serilog Enricher" },  // OPTIONAL — override legend/badge
+  // wording per block type; put custom legend text here (config survives
+  // upgrades), never by editing the TYPE_LABELS constant in the runtime
   tabs: [
     {
       id: "system",                       // unique; used as cache key + svg/png filename
@@ -155,10 +170,12 @@ const app = {
       ],
 
       blocks: [                            // the nodes
-        { id, container, label, type, x, y, w, h, description, tech, responsibilities },
+        { id, container, label, type, x, y, w, h, description, code, tech, responsibilities },
         // container = id of the zone this block belongs to; omit it (or omit
         // `containers` entirely) and the block packs as a FREE unit
         // type drives the color (client / http / worker / infra / queue / db / external)
+        // code (optional) = a verbatim monospace code block shown in the side
+        // panel below the description (selectable, horizontal scroll)
       ],
 
       edges: [
@@ -167,10 +184,16 @@ const app = {
         // curve direction is auto-derived from each port's face so the
         // arrowhead always points into the target block; bendDir: 1 | -1 is an
         // override, only needed to bow parallel edges apart from each other
-        // when no bendDir is set, the curve also auto-routes around any block
-        // or zone that sits between the endpoints (grows/flips its bow just
-        // enough to clear it); an explicit bendDir always wins over this and
-        // is never auto-adjusted
+        // when no bendDir is set, the curve also auto-routes around any block,
+        // zone, or zone-title pill that sits between the endpoints — it grows,
+        // flips, AND skews its bow (slides the control point along the chord,
+        // so the arc can swing wide early or late) just enough to clear it,
+        // taking the calmest curve that works; edges draw UNDER blocks, so an
+        // un-cleared route is an invisible line, not a cosmetic nit.
+        // a zone the chord MUST cross anyway
+        // (a band/lane lying strictly between the endpoints) is crossed with a
+        // calm minimal bow instead of being fought; an explicit bendDir always
+        // wins over this and is never auto-adjusted
       ],
 
       // For type: "sequence" tabs, use `actors` + `messages` instead of
