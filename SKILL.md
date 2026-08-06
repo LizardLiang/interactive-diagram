@@ -182,18 +182,26 @@ const app = {
         { from, to, label, style, bendDir },
         // style: "sync" | "async" | "dashed"
         // curve direction is auto-derived from each port's face so the
-        // arrowhead always points into the target block; bendDir: 1 | -1 is an
-        // override, only needed to bow parallel edges apart from each other
-        // when no bendDir is set, the curve also auto-routes around any block,
-        // zone, or zone-title pill that sits between the endpoints — it grows,
-        // flips, AND skews its bow (slides the control point along the chord,
-        // so the arc can swing wide early or late) just enough to clear it,
-        // taking the calmest curve that works; edges draw UNDER blocks, so an
-        // un-cleared route is an invisible line, not a cosmetic nit.
-        // a zone the chord MUST cross anyway
-        // (a band/lane lying strictly between the endpoints) is crossed with a
-        // calm minimal bow instead of being fought; an explicit bendDir always
-        // wins over this and is never auto-adjusted
+        // arrowhead always points into the target block.
+        //
+        // when no bendDir is set, the curve auto-routes around whatever sits
+        // between the endpoints — it grows, flips, AND skews its bow (slides
+        // the control point along the chord, so the arc can swing wide early
+        // or late), taking the calmest curve that clears. obstacles are
+        // tiered, because edges draw UNDER blocks:
+        //   blocks       — opaque; an un-cleared block is an INVISIBLE line
+        //   zones/titles — translucent chrome; crossing one is cosmetic
+        // so it first looks for a curve that clears everything, and only if
+        // none exists does it concede the zones to keep the line visible.
+        // a zone the chord MUST cross anyway (a band/lane lying strictly
+        // between the endpoints) is crossed with a calm minimal bow instead
+        // of being fought.
+        //
+        // bendDir: 1 | -1 is a manual override for bowing parallel edges
+        // apart from each other. CAUTION: it bypasses obstacle avoidance
+        // entirely and is never auto-adjusted — an authored bendDir will
+        // happily park a line underneath a block. Reach for it only when
+        // auto-routing has visibly failed, and re-check the edge afterwards.
       ],
 
       // For type: "sequence" tabs, use `actors` + `messages` instead of

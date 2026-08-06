@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
-    <meta name="generator" content="interactive-diagram v1.13.0" />
+    <meta name="generator" content="interactive-diagram v1.14.0" />
     <title>AI Agent Platform — Interactive Diagram</title>
     <!--
       ============================================================================
@@ -1486,10 +1486,10 @@
           // only guarantees 8px title↔block clearance, so demanding the full
           // CLEAR_MARGIN (12px) around a title sitting legally next to a port
           // would poison every candidate and force the max-bow fallback.
-          boxes.push(Object.assign(tab.layout.titleBox(s, 11), { _margin: 4 }));
+          boxes.push(Object.assign(tab.layout.titleBox(s, 11), { _margin: 4, _soft: true }));
           if (s.id === fromC || s.id === toC) return; // don't avoid own zone
           const box = containerBox(tab, s.id);
-          if (box && !unavoidableZone(s, box, p1, p2)) boxes.push(box);
+          if (box && !unavoidableZone(s, box, p1, p2)) boxes.push(Object.assign({}, box, { _soft: true }));
         });
         return boxes;
       }
@@ -1499,12 +1499,26 @@
       // obstacle, return it unchanged (R5). Otherwise grow the offset on each
       // side (preferred side first) until a candidate clears everything, and
       // take whichever side needed the smaller offset. If neither side clears
-      // within MAX_BOW, fall back to the side with the least residual
-      // penetration at the cap (best-effort, R3).
+      // within MAX_BOW, drop the SOFT obstacles and search again for a curve
+      // that at least clears every block; only if that also fails does it fall
+      // back to the least residual penetration at the cap (best-effort, R3).
+      //
+      // Obstacles come in two classes and they are NOT equally important:
+      //   hard — blocks. Edges draw UNDERNEATH blocks, so a curve that fails
+      //          to clear one is an invisible line, not a cosmetic nit.
+      //   soft — zone rectangles and zone-title pills. These are translucent
+      //          background chrome; a line crossing one stays perfectly
+      //          readable.
+      // Treating them alike is what made long edges vanish: one zone that no
+      // perpendicular offset can clear failed EVERY candidate, so the search
+      // gave up and picked a capped curve scored on zone penetration — while
+      // that curve still ran straight through a block. Zone avoidance is a
+      // preference; block avoidance is the whole point.
       function avoidControl(tab, edge, p1, p2) {
         const base = edgeControl(p1, p2, p1.normal, p2.normal, null);
         const obstacles = edgeObstacles(tab, edge, p1, p2);
-        if (obstacles.every((b) => curveClears(p1, base, p2, b, obstacleMargin(b)))) return base;
+        const clears = (c, set) => set.every((b) => curveClears(p1, c, p2, b, obstacleMargin(b)));
+        if (clears(base, obstacles)) return base; // R5: nothing in the way
 
         const u = perpUnit(p1, p2);
         if (!u) return base; // degenerate chord — nothing to search
@@ -1514,34 +1528,60 @@
           x: p1.x + (p2.x - p1.x) * s + u.x * off,
           y: p1.y + (p2.y - p1.y) * s + u.y * off,
         });
-        const clearsAll = (c) => obstacles.every((b) => curveClears(p1, c, p2, b, obstacleMargin(b)));
-        const worstPen = (c) => Math.max(...obstacles.map((b) => curvePenetration(p1, c, p2, b, obstacleMargin(b))));
-
-        let winner = null, winnerOff = Infinity;
-        let fallback = null, fallbackPen = Infinity;
-        for (const side of [sign, -sign]) {
-          let cleared = null, clearedOff = Infinity;
-          // smallest offset wins, so the calmest curve that clears is taken;
-          // within one offset, midpoint (CHORD_SKEWS[0]) is preferred.
-          for (let off = BOW_OFFSET; off <= MAX_BOW && !cleared; off += BOW_STEP) {
-            for (const s of CHORD_SKEWS) {
-              const c = mkC(side * off, s);
-              if (clearsAll(c)) { cleared = c; clearedOff = off; break; }
+        // search one obstacle set; null when nothing clears it within MAX_BOW
+        const search = (set) => {
+          let winner = null, winnerOff = Infinity;
+          for (const side of [sign, -sign]) {
+            // smallest offset wins, so the calmest curve that clears is taken;
+            // within one offset, midpoint (CHORD_SKEWS[0]) is preferred.
+            for (let off = BOW_OFFSET; off <= MAX_BOW; off += BOW_STEP) {
+              let hit = null;
+              for (const s of CHORD_SKEWS) {
+                const c = mkC(side * off, s);
+                if (clears(c, set)) { hit = c; break; }
+              }
+              if (hit) {
+                if (off < winnerOff) { winnerOff = off; winner = hit; }
+                break; // this side is settled — larger offsets are only calmer-losing
+              }
             }
           }
-          if (cleared) {
-            if (clearedOff < winnerOff) { winnerOff = clearedOff; winner = cleared; }
-          } else {
-            // nothing cleared this side — keep the least-penetrating capped
-            // curve, skews included (a skewed cap often grazes far less).
+          return winner;
+        };
+
+        const hard = obstacles.filter((b) => !b._soft);
+        // everything first (zones respected when that's achievable), then
+        // blocks only (zones conceded so the line stays visible)
+        const tiers = hard.length && hard.length < obstacles.length ? [obstacles, hard] : [obstacles];
+        for (const set of tiers) {
+          const winner = search(set);
+          if (winner) return winner;
+        }
+
+        // Not even the blocks can be cleared — some edges genuinely have to
+        // thread between two rows with no gap a quadratic can fit through.
+        // Take the curve that grazes them LEAST, swept over the whole
+        // candidate grid rather than only at the MAX_BOW cap: the least-bad
+        // route is usually a moderate bow, and scoring only the cap picked a
+        // maximally ballooned curve that was still buried in a block.
+        // Scored on blocks only — soft obstacles were never what made the line
+        // unreadable, and letting them pick the fallback is the bug above.
+        const penSet = hard.length ? hard : obstacles;
+        const worstPen = (c) =>
+          Math.max(...penSet.map((b) => curvePenetration(p1, c, p2, b, obstacleMargin(b))));
+        let fallback = null, fallbackPen = Infinity;
+        for (const side of [sign, -sign]) {
+          for (let off = BOW_OFFSET; off <= MAX_BOW; off += BOW_STEP) {
             for (const s of CHORD_SKEWS) {
-              const capC = mkC(side * MAX_BOW, s);
-              const pen = worstPen(capC);
-              if (pen < fallbackPen) { fallbackPen = pen; fallback = capC; }
+              const c = mkC(side * off, s);
+              const pen = worstPen(c);
+              // ties go to the calmer curve: strict < keeps the first (smallest
+              // offset, midpoint-most skew) candidate at equal penetration.
+              if (pen < fallbackPen) { fallbackPen = pen; fallback = c; }
             }
           }
         }
-        return winner || fallback || base;
+        return fallback || base;
       }
       // {p1, p2, c} for an edge from the CURRENT block positions — single
       // source of truth so render/drag/label/hover never disagree on the curve.
