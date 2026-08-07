@@ -2,7 +2,7 @@
   "name": "interactive-diagram",
   "displayName": "Interactive Diagram",
   "version": "1.16.0",
-  "description": "Build beautiful, interactive technical diagrams (system / architecture / sequence / flow) as a single self-contained HTML file — pure HTML, CSS, and vanilla JS, no build step. Tabbed multi-view, pan / zoom / drag, connected-chain highlight, double-click pin, dark mode (Tokyo Night), overlap auto-fix, and SVG / PNG export. Plus a static, slide-ready platform-architecture poster mode with a built-in overflow / overlap audit, one-click auto-fix, and download-fixed-HTML.",
+  "description": "Build beautiful, interactive technical diagrams (system / architecture / sequence / flow / ER) as a single self-contained HTML file — pure HTML, CSS, and vanilla JS, no build step. Tabbed multi-view, pan / zoom / drag, connected-chain highlight, double-click pin, dark mode (Tokyo Night), overlap auto-fix, and SVG / PNG export. ER mode renders real table nodes — column rows with types and PK / FK / UK badges, relationship lines anchored to the specific column, Crow's Foot cardinality at both ends, identifying vs non-identifying line styles, and orthogonal routing with self-referencing loop-back. Plus a static, slide-ready platform-architecture poster mode with a built-in overflow / overlap audit, one-click auto-fix, and download-fixed-HTML.",
   "author": {
     "name": "LizardLiang",
     "url": "https://github.com/LizardLiang"
@@ -16,6 +16,10 @@
     "system-design",
     "sequence-diagram",
     "flowchart",
+    "er-diagram",
+    "entity-relationship",
+    "database-schema",
+    "crows-foot",
     "svg",
     "visualization",
     "interactive",

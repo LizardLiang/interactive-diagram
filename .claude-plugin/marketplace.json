@@ -8,7 +8,7 @@
     {
       "name": "interactive-diagram",
       "source": "./",
-      "description": "Build beautiful, interactive technical diagrams as a single self-contained HTML file (pure HTML/CSS/vanilla JS).",
+      "description": "Build beautiful, interactive technical diagrams — system, sequence, flow, and ER — as a single self-contained HTML file (pure HTML/CSS/vanilla JS).",
       "version": "1.16.0"
     }
   ]
