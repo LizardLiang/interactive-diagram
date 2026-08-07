@@ -193,6 +193,14 @@ const app = {
         // block one band below but far off to the side connects top-to-bottom
         // (reads as flow), while a near-level neighbour connects side-to-side.
         //
+        // face selection is ROUTING-AWARE: the cone judges geometry alone, so
+        // in a dense tab it can pick an axis that then can't be routed and the
+        // line ends up buried under a block. when that happens the edge is
+        // retried on the perpendicular axis and whichever actually clears is
+        // kept (if neither clears, the one grazing blocks least wins, ties to
+        // the cone). you don't author this — it just means a correct-looking
+        // cone choice never costs you a visible line.
+        //
         // fromSide / toSide: "left" | "right" | "top" | "bottom" pin ONE end to
         // an exact face, for the intent geometry can't infer. Use sparingly —
         // the cone is right most of the time. A face pinned AWAY from the other

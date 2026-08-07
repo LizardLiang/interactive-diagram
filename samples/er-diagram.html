@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
-    <meta name="generator" content="interactive-diagram v1.17.0" />
+    <meta name="generator" content="interactive-diagram v1.18.0" />
     <title>E-Commerce ER Diagram — Interactive Diagram</title>
     <!--
       ============================================================================
@@ -1417,14 +1417,18 @@
       // LEFT/RIGHT face — a row is a horizontal band, so it can only leave
       // sideways. `side` (6th arg) is the authored face override.
       //
-      // Precedence: rowOffset (ER column anchoring) > side > cone. Inside the
-      // row branch only left/right can apply — top/bottom contradicts a row
-      // band, so it is ignored there and the geometric pick stands.
+      // Precedence: rowOffset (ER column anchoring) > side > axis > cone.
+      // Inside the row branch only left/right can apply — top/bottom
+      // contradicts a row band, so it is ignored there and the geometric pick
+      // stands. `axis` ("h" | "v", 7th arg) forces the cone's decision without
+      // naming a specific face; it is how edgeGeom retries an edge on the
+      // perpendicular axis when the cone's choice cannot be routed, and is
+      // never author-facing.
       //
       // Both ends of an edge see identical |dx|,|dy| (only the signs flip), so
       // the cone always resolves the SAME axis at both ends — the symmetry the
       // curve router depends on. An override deliberately breaks that per end.
-      function portN(tab, fromId, toId, isFrom, rowOffset, side) {
+      function portN(tab, fromId, toId, isFrom, rowOffset, side, axis) {
         const a = blockBox(tab, fromId), b = blockBox(tab, toId);
         const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2;
         const me = isFrom ? a : b, mx = isFrom ? ax : bx, my = isFrom ? ay : by;
@@ -1436,7 +1440,8 @@
           return { x: s > 0 ? me.x + me.w : me.x, y: me.y + rowOffset, normal: { x: s, y: 0 } };
         }
         if (SIDE_PORT[side]) return SIDE_PORT[side](me);
-        if (Math.abs(dy) < Math.abs(dx) * PORT_H_TAN)
+        const horiz = axis ? axis === "h" : Math.abs(dy) < Math.abs(dx) * PORT_H_TAN;
+        if (horiz)
           return { x: dx > 0 ? me.x + me.w : me.x, y: my, normal: { x: dx > 0 ? 1 : -1, y: 0 } };
         return { x: mx, y: dy > 0 ? me.y + me.h : me.y, normal: { x: 0, y: dy > 0 ? 1 : -1 } };
       }
@@ -1726,16 +1731,53 @@
       // orthogonal router (orthoGeom) instead of the curved avoidControl.
       // fromSide/toSide are the per-end face overrides; both are undefined on
       // an un-authored edge, which leaves face selection entirely to the cone.
+      //
+      // The cone picks a face from geometry ALONE, so in a dense tab it can
+      // choose an axis that avoidControl then cannot route: the curve ends up
+      // buried under a block (an invisible line), while the perpendicular axis
+      // would have routed cleanly. Face selection is therefore routing-aware —
+      // try the cone's axis, and if its best curve still runs through a block,
+      // retry on the perpendicular axis and keep whichever actually clears.
+      // When neither clears, keep the one that grazes blocks least, with ties
+      // going to the cone so the default stays deterministic.
+      //
+      // The retry is skipped whenever the author has already decided the face
+      // (fromSide/toSide), the end is a column-anchored ER row, or bendDir is
+      // set — in all three the geometry is intentional and not ours to second-
+      // guess. It also costs nothing on the common path: the alternate axis is
+      // only computed for an edge whose primary route already failed.
+      function blockClearance(tab, edge, p1, c, p2) {
+        const boxes = blocksExcept(tab, edge.from, edge.to);
+        let worst = 0;
+        for (const b of boxes) {
+          if (curveClears(p1, c, p2, b, CLEAR_MARGIN)) continue;
+          const pen = curvePenetration(p1, c, p2, b, CLEAR_MARGIN);
+          if (pen > worst) worst = pen;
+        }
+        return worst; // 0 === clears every block
+      }
       function edgeGeom(tab, edge) {
         const fromOffset = rowOffsetFor(tab, edge.from, edge.fromColumn);
         const toOffset = rowOffsetFor(tab, edge.to, edge.toColumn);
-        const p1 = portN(tab, edge.from, edge.to, true, fromOffset, edge.fromSide);
-        const p2 = portN(tab, edge.from, edge.to, false, toOffset, edge.toSide);
+        const ports = (axis) => [
+          portN(tab, edge.from, edge.to, true, fromOffset, edge.fromSide, axis),
+          portN(tab, edge.from, edge.to, false, toOffset, edge.toSide, axis),
+        ];
+        const [p1, p2] = ports(null);
         if (tab.type === "er") return orthoGeom(tab, edge, p1, p2);
-        const c = edge.bendDir != null
-          ? edgeControl(p1, p2, p1.normal, p2.normal, edge.bendDir)
-          : avoidControl(tab, edge, p1, p2);
-        return { kind: "curve", p1, c, p2 };
+        if (edge.bendDir != null)
+          return { kind: "curve", p1, c: edgeControl(p1, p2, p1.normal, p2.normal, edge.bendDir), p2 };
+        const c = avoidControl(tab, edge, p1, p2);
+        const pinned = edge.fromSide || edge.toSide || fromOffset != null || toOffset != null;
+        if (pinned) return { kind: "curve", p1, c, p2 };
+        const pen = blockClearance(tab, edge, p1, c, p2);
+        if (pen === 0) return { kind: "curve", p1, c, p2 };
+        const [q1, q2] = ports(p1.normal.y === 0 ? "v" : "h");
+        const qc = avoidControl(tab, edge, q1, q2);
+        const qpen = blockClearance(tab, edge, q1, qc, q2);
+        return qpen < pen
+          ? { kind: "curve", p1: q1, c: qc, p2: q2 }
+          : { kind: "curve", p1, c, p2 };
       }
       function curve(p1, c, p2) {
         return `M${p1.x},${p1.y} Q${c.x},${c.y} ${p2.x},${p2.y}`;
