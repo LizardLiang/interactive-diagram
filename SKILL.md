@@ -208,6 +208,15 @@ const app = {
         // edge afterwards. A typo warns in the console and is ignored.
         // Ignored on sequence tabs (they have their own renderer).
         //
+        // whichever face an end lands on, arrival/exit ANGLE against that face
+        // is corrected automatically: an end grazing its face at under 38° (it
+        // would read as the arrowhead lying flat on the border instead of
+        // entering it) is rotated onto the face's normal, tail length clamped
+        // to a sane window. Already-steep ends are untouched. You don't author
+        // this either — it's un-authored, like the retry above — and it yields
+        // to obstacle clearance: a snap that would push the line into a block
+        // the router had cleared is discarded and the original curve is kept.
+        //
         // when no bendDir is set, the curve auto-routes around whatever sits
         // between the endpoints — it grows, flips, AND skews its bow (slides
         // the control point along the chord, so the arc can swing wide early
@@ -226,6 +235,10 @@ const app = {
         // entirely and is never auto-adjusted — an authored bendDir will
         // happily park a line underneath a block. Reach for it only when
         // auto-routing has visibly failed, and re-check the edge afterwards.
+        // The face-snap above is the one exception: it still straightens a
+        // grazing end even on a bendDir edge, because it only rotates the
+        // terminal handle and never touches which side bendDir put the bow
+        // on — the bow-side choice you authored is preserved exactly.
       ],
 
       // For type: "sequence" tabs, use `actors` + `messages` instead of

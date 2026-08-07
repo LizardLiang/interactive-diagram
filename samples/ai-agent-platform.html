@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
-    <meta name="generator" content="interactive-diagram v1.18.0" />
+    <meta name="generator" content="interactive-diagram v1.19.0" />
     <title>AI Agent Platform — Interactive Diagram</title>
     <!--
       ============================================================================
@@ -1339,7 +1339,7 @@
           (tab.edges || []).forEach((edge, idx) => {
             const geom = edgeGeom(tab, edge);
             const curvePts = geom.kind === "ortho" ? null
-              : samplePath(geom, curveAuditSampleCount(geom.p1, geom.c, geom.p2));
+              : samplePath(geom, curveAuditSampleCount(geom));
             tab.blocks.forEach((block) => {
               if (block.id === edge.from || block.id === edge.to) return; // own endpoints exempt
               const box = { x: block.x, y: block.y, w: block.w, h: block.h };
@@ -1641,6 +1641,22 @@
       // tried first at every offset, so a curve that has no obstacle keeps
       // exactly today's shape.
       const CHORD_SKEWS = [0.5, 0.35, 0.65, 0.2, 0.8];
+      // Grazing threshold for the face-snap below (edgeGeom → faceSnap): an
+      // arrival/exit shallower than this reads as the arrowhead lying flat
+      // against the border instead of entering it. 38, not 45 (a diagonal,
+      // which would re-square plenty of curves that already read fine) or
+      // 30 (too eager) — chosen so only genuinely flat arrivals get
+      // straightened, mirroring PORT_H_CONE_DEG's "one number, not a
+      // judgment call per edge" precedent above.
+      const FACE_MIN_DEG = 38;
+      // Snapped handle length, clamped from the router's own magnitude
+      // (never invented from scratch): TAIL_MIN keeps a snap from
+      // collapsing to a near-zero stub when the port sits close to the
+      // control point; TAIL_MAX bounds how far the straightened tail
+      // reaches before it reads as its own segment instead of a smooth
+      // entry into the curve.
+      const TAIL_MIN = 24;
+      const TAIL_MAX = 64;
       // unit perpendicular of chord p1->p2 (rotate the chord vector 90°); null
       // for coincident points (degenerate chord).
       function perpUnit(p1, p2) {
@@ -1668,6 +1684,18 @@
         if (dot === 0) return { x: mx, y: my }; // aligned → straight
         const off = BOW_OFFSET * Math.sign(dot);
         return { x: mx + u.x * off, y: my + u.y * off };
+      }
+      // Degree-elevate a quadratic (p1, c, p2) to the cubic control points
+      // that trace the IDENTICAL curve (standard Bézier elevation formula).
+      // This is the safety net for the face-snap below: an edge that never
+      // trips FACE_MIN_DEG renders through these exact handles, pixel-for-
+      // pixel what the quadratic already drew — the snap only ever moves a
+      // handle away from this baseline, never the curve itself.
+      function elevate(p1, c, p2) {
+        return {
+          c1: { x: p1.x + (2 / 3) * (c.x - p1.x), y: p1.y + (2 / 3) * (c.y - p1.y) },
+          c2: { x: p2.x + (2 / 3) * (c.x - p2.x), y: p2.y + (2 / 3) * (c.y - p2.y) },
+        };
       }
       // --- obstacle-avoidance geometry (auto-route around blocks/zones) ------
       // Dependency-free box + curve-sampling helpers; obstacles are plain
@@ -1729,11 +1757,15 @@
       const CURVE_AUDIT_MAX_GAP = 12;
       // Cheap coarse-polyline length estimate — order-of-magnitude is enough
       // to pick a sample count, so 16 points is plenty and stays fast even
-      // for many edges.
-      function approxCurveLen(p1, c, p2, coarse = 16) {
-        let len = 0, prev = p1;
+      // for many edges. Takes `geom` (not raw p1/c/p2) and walks it through
+      // pointAt so this works for a "cubic" face-snap geom exactly like a
+      // plain quadratic — pointAt is defined further down but already exists
+      // by the time this actually runs (audit is user-triggered, well after
+      // the whole script has parsed).
+      function approxCurveLen(geom, coarse = 16) {
+        let len = 0, prev = pointAt(geom, 0);
         for (let i = 1; i <= coarse; i++) {
-          const pt = bezierAt(p1, c, p2, i / coarse);
+          const pt = pointAt(geom, i / coarse);
           len += polySegLen(prev, pt);
           prev = pt;
         }
@@ -1742,8 +1774,8 @@
       // clamp: never fewer than the original 24 (typical short edges keep
       // identical audit behavior), never more than 400 (pathological-length
       // guard — still sub-millisecond per edge).
-      function curveAuditSampleCount(p1, c, p2) {
-        const len = approxCurveLen(p1, c, p2);
+      function curveAuditSampleCount(geom) {
+        const len = approxCurveLen(geom);
         return Math.min(400, Math.max(24, Math.ceil(len / CURVE_AUDIT_MAX_GAP)));
       }
       // a zone the chord MUST cross no matter the bow: a full-width band whose
@@ -1899,15 +1931,90 @@
       // set — in all three the geometry is intentional and not ours to second-
       // guess. It also costs nothing on the common path: the alternate axis is
       // only computed for an edge whose primary route already failed.
-      function blockClearance(tab, edge, p1, c, p2) {
+      // worst-case depth (px) any point in `pts` sits inside `box` inflated
+      // by `margin`; 0 when every point already clears it. Point-list form
+      // (vs. curvePenetration's bezier-native one, which stays untouched for
+      // avoidControl's own inner search) is what lets blockClearance below
+      // score a snapped cubic candidate exactly the way it already scores a
+      // quadratic one.
+      function pointsPenetration(pts, box, margin) {
+        const bx0 = box.x - margin, bx1 = box.x + box.w + margin;
+        const by0 = box.y - margin, by1 = box.y + box.h + margin;
+        let maxDepth = 0;
+        for (const q of pts) {
+          if (q.x <= bx0 || q.x >= bx1 || q.y <= by0 || q.y >= by1) continue;
+          const depth = Math.min(q.x - bx0, bx1 - q.x, q.y - by0, by1 - q.y);
+          if (depth > maxDepth) maxDepth = depth;
+        }
+        return maxDepth;
+      }
+      // worst block penetration (px) for a resolved geom, kind-agnostic via
+      // pointAt: the same 24-interior-sample contract the v1.18 axis retry
+      // below already relies on now also scores faceSnap's cubic candidate
+      // against its unsnapped baseline, with no separate code path. A
+      // "curve" geom samples through the exact same bezierAt call as before
+      // this generalization, so existing edges score byte-identically.
+      function blockClearance(tab, edge, geom) {
         const boxes = blocksExcept(tab, edge.from, edge.to);
+        const pts = [];
+        for (let i = 1; i < 24; i++) pts.push(pointAt(geom, i / 24));
         let worst = 0;
         for (const b of boxes) {
-          if (curveClears(p1, c, p2, b, CLEAR_MARGIN)) continue;
-          const pen = curvePenetration(p1, c, p2, b, CLEAR_MARGIN);
+          const pen = pointsPenetration(pts, b, CLEAR_MARGIN);
           if (pen > worst) worst = pen;
         }
         return worst; // 0 === clears every block
+      }
+      // Rotate a snapped end's handle onto the port's own outward normal.
+      // Works identically for the exit end (p1/c1) and the arrival end
+      // (p2/c2) with no sign flip between them: the arrival's textbook graze
+      // test, normalize(p2-c2)·(-n2), is algebraically identical to
+      // normalize(c2-p2)·n2 — the two negations cancel — so testing a
+      // handle's direction off its OWN port against that same port's
+      // outward normal is the true grazing angle at either end, with no
+      // assumption about which way the handle happens to trail. A handle
+      // that trails backward just scores a very negative graze, still
+      // trips the threshold below, and gets snapped to the correct outward
+      // direction regardless.
+      // Returns null (no snap) once the end already clears FACE_MIN_DEG,
+      // which is the common case and what keeps most edges untouched.
+      function snapHandle(port, handle, normal) {
+        const dx = handle.x - port.x, dy = handle.y - port.y;
+        const len = Math.hypot(dx, dy);
+        if (!len) return null; // coincident handle/port — nothing to rotate
+        const dot = Math.max(-1, Math.min(1, (dx / len) * normal.x + (dy / len) * normal.y));
+        const graze = 90 - (Math.acos(dot) * 180) / Math.PI;
+        if (graze >= FACE_MIN_DEG) return null;
+        const L = Math.max(TAIL_MIN, Math.min(TAIL_MAX, len));
+        return { x: port.x + normal.x * L, y: port.y + normal.y * L };
+      }
+      // Face-perpendicular arrival/exit (v1.19): degree-elevate the router's
+      // quadratic to an equivalent cubic (elevate, above), then snap
+      // whichever end(s) graze their face below FACE_MIN_DEG onto that
+      // face's normal. Run at every curve-producing exit of edgeGeom,
+      // INCLUDING bendDir edges — bendDir only pins which SIDE the bow sits
+      // on (obstacle avoidance is what it bypasses, see the SKILL.md
+      // CAUTION), so straightening its terminal handles is still fair game.
+      //
+      // `curveGeom` doubles as the safety net: an edge where neither end
+      // trips the threshold returns it completely unchanged, so the common
+      // path stays byte-identical to pre-v1.19 output. The clearance guard
+      // is the other half — avoidControl searched in quadratic space and
+      // never saw this perturbation, so a snap that pushes a handle into a
+      // block the router had already cleared is discarded and the unsnapped
+      // curve wins. Strict `>` (not `>=`) so a snap that costs nothing —
+      // the overwhelming majority, since TAIL_MAX only reaches 64px from a
+      // port — is kept rather than thrown away on a 0-vs-0 tie.
+      function faceSnap(tab, edge, curveGeom) {
+        const { p1, c, p2 } = curveGeom;
+        const { c1, c2 } = elevate(p1, c, p2);
+        const snap1 = snapHandle(p1, c1, p1.normal);
+        const snap2 = snapHandle(p2, c2, p2.normal);
+        if (!snap1 && !snap2) return curveGeom; // both ends already steep enough
+        const cubicGeom = { kind: "cubic", p1, c1: snap1 || c1, c2: snap2 || c2, p2 };
+        const before = blockClearance(tab, edge, curveGeom);
+        const after = blockClearance(tab, edge, cubicGeom);
+        return after > before ? curveGeom : cubicGeom;
       }
       function edgeGeom(tab, edge) {
         const fromOffset = rowOffsetFor(tab, edge.from, edge.fromColumn);
@@ -1919,21 +2026,26 @@
         const [p1, p2] = ports(null);
         if (tab.type === "er") return orthoGeom(tab, edge, p1, p2);
         if (edge.bendDir != null)
-          return { kind: "curve", p1, c: edgeControl(p1, p2, p1.normal, p2.normal, edge.bendDir), p2 };
+          return faceSnap(tab, edge, { kind: "curve", p1, c: edgeControl(p1, p2, p1.normal, p2.normal, edge.bendDir), p2 });
         const c = avoidControl(tab, edge, p1, p2);
         const pinned = edge.fromSide || edge.toSide || fromOffset != null || toOffset != null;
-        if (pinned) return { kind: "curve", p1, c, p2 };
-        const pen = blockClearance(tab, edge, p1, c, p2);
-        if (pen === 0) return { kind: "curve", p1, c, p2 };
+        if (pinned) return faceSnap(tab, edge, { kind: "curve", p1, c, p2 });
+        const base = { kind: "curve", p1, c, p2 };
+        const pen = blockClearance(tab, edge, base);
+        if (pen === 0) return faceSnap(tab, edge, base);
         const [q1, q2] = ports(p1.normal.y === 0 ? "v" : "h");
         const qc = avoidControl(tab, edge, q1, q2);
-        const qpen = blockClearance(tab, edge, q1, qc, q2);
-        return qpen < pen
-          ? { kind: "curve", p1: q1, c: qc, p2: q2 }
-          : { kind: "curve", p1, c, p2 };
+        const qGeom = { kind: "curve", p1: q1, c: qc, p2: q2 };
+        const qpen = blockClearance(tab, edge, qGeom);
+        return faceSnap(tab, edge, qpen < pen ? qGeom : base);
       }
       function curve(p1, c, p2) {
         return `M${p1.x},${p1.y} Q${c.x},${c.y} ${p2.x},${p2.y}`;
+      }
+      // cubic twin of curve() — the "kind: cubic" face-snap geom's path
+      // string. Same M...end-point shape, just a two-handle C instead of Q.
+      function cubicCurve(p1, c1, c2, p2) {
+        return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
       }
       // point on the quadratic Bézier at parameter t∈[0,1]
       function bezierAt(p1, c, p2, t) {
@@ -1943,11 +2055,30 @@
           y: u * u * p1.y + 2 * u * t * c.y + t * t * p2.y,
         };
       }
+      // point on the cubic Bézier at parameter t∈[0,1] — cubic twin of
+      // bezierAt(), same shape with the extra (1-t)²t / (1-t)t² handle terms.
+      function cubicAt(p1, c1, c2, p2, t) {
+        const u = 1 - t;
+        return {
+          x: u * u * u * p1.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p2.x,
+          y: u * u * u * p1.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p2.y,
+        };
+      }
       // t of the curve point closest to `pt` (coarse sample, good enough for hover)
       function nearestT(p1, c, p2, pt) {
         let best = 0.5, bestD = Infinity;
         for (let i = 0; i <= 24; i++) {
           const t = i / 24, q = bezierAt(p1, c, p2, t);
+          const d = (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2;
+          if (d < bestD) { bestD = d; best = t; }
+        }
+        return best;
+      }
+      // cubic twin of nearestT() — same coarse-sample search over cubicAt().
+      function cubicNearestT(p1, c1, c2, p2, pt) {
+        let best = 0.5, bestD = Infinity;
+        for (let i = 0; i <= 24; i++) {
+          const t = i / 24, q = cubicAt(p1, c1, c2, p2, t);
           const d = (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2;
           if (d < bestD) { bestD = d; best = t; }
         }
@@ -2069,24 +2200,33 @@
         }
         return bestT;
       }
-      // --- geometry adapter: dispatch curve (bezier) vs ortho (polyline) ---
-      // edgeGeom returns one of two shapes (kind: "curve" | "ortho"); every
-      // consumer below goes through these four functions instead of calling
-      // curve()/bezierAt()/curveNormalAt()/nearestT() directly, so render,
-      // drag, and label placement never disagree about the path — and the
-      // curve branch forwards to the ORIGINAL unchanged functions, so
-      // non-ER behavior is bit-for-bit identical to before this adapter existed.
+      // --- geometry adapter: dispatch curve (bezier) vs cubic vs ortho -----
+      // edgeGeom returns one of three shapes (kind: "curve" | "cubic" |
+      // "ortho"); every consumer below goes through these four functions
+      // instead of calling curve()/bezierAt()/curveNormal()/nearestT() (or
+      // their cubic twins) directly, so render, drag, and label placement
+      // never disagree about the path — and the curve/ortho branches forward
+      // to the ORIGINAL unchanged functions, so non-snapped, non-ER behavior
+      // stays bit-for-bit identical to before "cubic" existed.
       function pathD(geom) {
-        return geom.kind === "ortho" ? polylineD(geom.points) : curve(geom.p1, geom.c, geom.p2);
+        return geom.kind === "ortho" ? polylineD(geom.points)
+          : geom.kind === "cubic" ? cubicCurve(geom.p1, geom.c1, geom.c2, geom.p2)
+          : curve(geom.p1, geom.c, geom.p2);
       }
       function pointAt(geom, t) {
-        return geom.kind === "ortho" ? polylinePointAt(geom.points, t) : bezierAt(geom.p1, geom.c, geom.p2, t);
+        return geom.kind === "ortho" ? polylinePointAt(geom.points, t)
+          : geom.kind === "cubic" ? cubicAt(geom.p1, geom.c1, geom.c2, geom.p2, t)
+          : bezierAt(geom.p1, geom.c, geom.p2, t);
       }
       function normalAt(geom, t) {
-        return geom.kind === "ortho" ? polylineNormalAt(geom.points, t) : curveNormal(geom.p1, geom.c, geom.p2, t);
+        return geom.kind === "ortho" ? polylineNormalAt(geom.points, t)
+          : geom.kind === "cubic" ? cubicNormal(geom.p1, geom.c1, geom.c2, geom.p2, t)
+          : curveNormal(geom.p1, geom.c, geom.p2, t);
       }
       function nearestParam(geom, pt) {
-        return geom.kind === "ortho" ? polylineNearestT(geom.points, pt) : nearestT(geom.p1, geom.c, geom.p2, pt);
+        return geom.kind === "ortho" ? polylineNearestT(geom.points, pt)
+          : geom.kind === "cubic" ? cubicNearestT(geom.p1, geom.c1, geom.c2, geom.p2, pt)
+          : nearestT(geom.p1, geom.c, geom.p2, pt);
       }
       function samplePath(geom, samples) {
         const pts = [];
@@ -2723,6 +2863,15 @@
       function curveNormal(p1, c, p2, t) {
         const tx = 2 * (1 - t) * (c.x - p1.x) + 2 * t * (p2.x - c.x);
         const ty = 2 * (1 - t) * (c.y - p1.y) + 2 * t * (p2.y - c.y);
+        const l = Math.hypot(tx, ty) || 1;
+        return { x: -ty / l, y: tx / l };
+      }
+      // cubic twin of curveNormal() — same tangent-then-rotate-90° shape,
+      // just the cubic derivative's three Bernstein terms instead of two.
+      function cubicNormal(p1, c1, c2, p2, t) {
+        const u = 1 - t;
+        const tx = 3 * u * u * (c1.x - p1.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (p2.x - c2.x);
+        const ty = 3 * u * u * (c1.y - p1.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (p2.y - c2.y);
         const l = Math.hypot(tx, ty) || 1;
         return { x: -ty / l, y: tx / l };
       }
