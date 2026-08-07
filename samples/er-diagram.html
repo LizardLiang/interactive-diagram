@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
-    <meta name="generator" content="interactive-diagram v1.16.0" />
+    <meta name="generator" content="interactive-diagram v1.17.0" />
     <title>E-Commerce ER Diagram — Interactive Diagram</title>
     <!--
       ============================================================================
@@ -364,6 +364,19 @@
       //                  rendered in the side panel below the description
       //                  (selectable text, horizontal scroll; omit to hide).
       //   edges[]      — connections between blocks.
+      //                  Which FACE each end leaves is normally automatic: the
+      //                  port uses left/right when the other block sits within
+      //                  PORT_H_CONE_DEG (30°) of horizontal, top/bottom
+      //                  otherwise. OPTIONAL `fromSide` / `toSide` pin one end
+      //                  to an exact face — "left" | "right" | "top" | "bottom"
+      //                  — for the cases geometry can't infer (e.g. forcing a
+      //                  downward flow to enter the target's top even though
+      //                  the target sits well off to the side). Use sparingly:
+      //                  the cone is right most of the time, and a pinned face
+      //                  that points away from the other block makes the curve
+      //                  loop around to reach it. Ignored on sequence tabs.
+      //                  OPTIONAL `bendDir` (-1 | 1) flips the curve's bow — it
+      //                  does NOT change the face; that is fromSide/toSide.
       //
       // For type: "er" tabs, blocks are TABLE nodes and edges are RELATIONSHIPS:
       //   blocks[].columns — [{ name, type, pk, fk, unique }], rendered as one
@@ -1370,27 +1383,60 @@
         const n = tab.blocks.find((d) => d.id === id);
         return { x: n.x, y: n.y, w: n.w, h: n.h };
       }
+      // Face selection is a CONE measured off the X-axis, not a raw px compare.
+      // A port leaves the LEFT/RIGHT face only when the other block sits within
+      // PORT_H_CONE_DEG of horizontal; anything steeper leaves TOP/BOTTOM.
+      //
+      // The old rule `|dx| > |dy|` was itself a cone — of exactly 45°. That is
+      // too wide for layered top-down diagrams: a downstream block one band
+      // below but well off to the side lands at ~33°, so the edge exited the
+      // source's RIGHT face and entered the target's LEFT face, reading as a
+      // sideways hop instead of a downward flow. 30° widens the vertical cone
+      // from 90° to 120° per side, which keeps that edge on top/bottom.
+      // Retuning the rule globally is now a one-number edit.
+      const PORT_H_CONE_DEG = 30;
+      const PORT_H_TAN = Math.tan((PORT_H_CONE_DEG * Math.PI) / 180);
+      // Explicit face override, authored per edge end as fromSide/toSide and
+      // resolved in edgeGeom. Each entry returns that face's midpoint port plus
+      // its OUTWARD normal. This exists because the cone is pure geometry and
+      // can never know intent: an edge that MUST enter the top face to read
+      // correctly has no angle that guarantees it. Unknown values fall through
+      // to the cone (validated with a warning at build time).
+      const SIDE_PORT = {
+        left:   (b) => ({ x: b.x,           y: b.y + b.h / 2, normal: { x: -1, y:  0 } }),
+        right:  (b) => ({ x: b.x + b.w,     y: b.y + b.h / 2, normal: { x:  1, y:  0 } }),
+        top:    (b) => ({ x: b.x + b.w / 2, y: b.y,           normal: { x:  0, y: -1 } }),
+        bottom: (b) => ({ x: b.x + b.w / 2, y: b.y + b.h,     normal: { x:  0, y:  1 } }),
+      };
       // port on the edge of a block box, picking the side facing the other block,
       // plus the face's OUTWARD normal: (-1,0) left / (+1,0) right / (0,-1) top /
       // (0,+1) bottom. The normal drives geometry-aware curve direction below.
-      // `rowOffset` (optional 5th arg) anchors the port at that Y offset from
-      // the block's own origin (e.g. an ER column row-center, see block._rows
-      // in fitTableBlock) instead of the face midpoint, always exiting the
+      // `rowOffset` (5th arg) anchors the port at that Y offset from the block's
+      // own origin (e.g. an ER column row-center, see block._rows in
+      // fitTableBlock) instead of the face midpoint, always exiting the
       // LEFT/RIGHT face — a row is a horizontal band, so it can only leave
-      // sideways. When rowOffset is null/undefined the port resolves EXACTLY
-      // as before: face-midpoint, side auto-picked from block-center geometry.
-      // This is the contract that protects every existing (non-ER) diagram.
-      function portN(tab, fromId, toId, isFrom, rowOffset) {
+      // sideways. `side` (6th arg) is the authored face override.
+      //
+      // Precedence: rowOffset (ER column anchoring) > side > cone. Inside the
+      // row branch only left/right can apply — top/bottom contradicts a row
+      // band, so it is ignored there and the geometric pick stands.
+      //
+      // Both ends of an edge see identical |dx|,|dy| (only the signs flip), so
+      // the cone always resolves the SAME axis at both ends — the symmetry the
+      // curve router depends on. An override deliberately breaks that per end.
+      function portN(tab, fromId, toId, isFrom, rowOffset, side) {
         const a = blockBox(tab, fromId), b = blockBox(tab, toId);
         const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2;
         const me = isFrom ? a : b, mx = isFrom ? ax : bx, my = isFrom ? ay : by;
         const dx = (isFrom ? bx - ax : ax - bx), dy = (isFrom ? by - ay : ay - by);
         if (rowOffset != null) {
           const otherCx = isFrom ? bx : ax;
-          const side = otherCx >= mx ? 1 : -1; // self-ref (otherCx===mx) → both ends exit right, consistently
-          return { x: side > 0 ? me.x + me.w : me.x, y: me.y + rowOffset, normal: { x: side, y: 0 } };
+          // self-ref (otherCx===mx) → both ends exit right, consistently
+          const s = side === "left" ? -1 : side === "right" ? 1 : (otherCx >= mx ? 1 : -1);
+          return { x: s > 0 ? me.x + me.w : me.x, y: me.y + rowOffset, normal: { x: s, y: 0 } };
         }
-        if (Math.abs(dx) > Math.abs(dy))
+        if (SIDE_PORT[side]) return SIDE_PORT[side](me);
+        if (Math.abs(dy) < Math.abs(dx) * PORT_H_TAN)
           return { x: dx > 0 ? me.x + me.w : me.x, y: my, normal: { x: dx > 0 ? 1 : -1, y: 0 } };
         return { x: mx, y: dy > 0 ? me.y + me.h : me.y, normal: { x: 0, y: dy > 0 ? 1 : -1 } };
       }
@@ -1676,14 +1722,15 @@
       // Row-offset resolution (fromColumn/toColumn → rowOffsetFor) runs for
       // EVERY tab type, but only ER edges ever carry those fields — a
       // system/flow edge always resolves null offsets, so portN takes its
-      // original face-midpoint branch and geometry is byte-for-byte
-      // unchanged. ER tabs additionally route through the orthogonal router
-      // (orthoGeom) instead of the curved avoidControl.
+      // face-midpoint branch. ER tabs additionally route through the
+      // orthogonal router (orthoGeom) instead of the curved avoidControl.
+      // fromSide/toSide are the per-end face overrides; both are undefined on
+      // an un-authored edge, which leaves face selection entirely to the cone.
       function edgeGeom(tab, edge) {
         const fromOffset = rowOffsetFor(tab, edge.from, edge.fromColumn);
         const toOffset = rowOffsetFor(tab, edge.to, edge.toColumn);
-        const p1 = portN(tab, edge.from, edge.to, true, fromOffset);
-        const p2 = portN(tab, edge.from, edge.to, false, toOffset);
+        const p1 = portN(tab, edge.from, edge.to, true, fromOffset, edge.fromSide);
+        const p2 = portN(tab, edge.from, edge.to, false, toOffset, edge.toSide);
         if (tab.type === "er") return orthoGeom(tab, edge, p1, p2);
         const c = edge.bendDir != null
           ? edgeControl(p1, p2, p1.normal, p2.normal, edge.bendDir)
@@ -2869,6 +2916,15 @@
           tab.blocks.forEach((b) => {
             if (b.container && !known.has(b.container))
               console.warn(`[layout] block '${b.id}' references unknown container '${b.container}' — treated as free`);
+          });
+          // fromSide/toSide typos would otherwise fail SILENTLY — the port just
+          // falls back to the cone and the author sees an unchanged diagram
+          // with no clue why the override did nothing. Warn instead.
+          tab.edges.forEach((e) => {
+            ["fromSide", "toSide"].forEach((k) => {
+              if (e[k] != null && !(e[k] in SIDE_PORT))
+                console.warn(`[edge] '${e.from}'->'${e.to}' has ${k}: '${e[k]}' — expected one of ${Object.keys(SIDE_PORT).join(" | ")}; ignored`);
+            });
           });
           // ER: a relationship naming a table or column that doesn't exist
           // degrades gracefully — warn once at build time and drop just that

@@ -182,10 +182,23 @@ const app = {
       ],
 
       edges: [
-        { from, to, label, style, bendDir },
+        { from, to, label, style, bendDir, fromSide, toSide },
         // style: "sync" | "async" | "dashed"
         // curve direction is auto-derived from each port's face so the
         // arrowhead always points into the target block.
+        //
+        // WHICH FACE an end leaves is a cone measured off the X-axis: the port
+        // uses the left/right face when the other block sits within 30°
+        // (PORT_H_CONE_DEG) of horizontal, and top/bottom otherwise. So a
+        // block one band below but far off to the side connects top-to-bottom
+        // (reads as flow), while a near-level neighbour connects side-to-side.
+        //
+        // fromSide / toSide: "left" | "right" | "top" | "bottom" pin ONE end to
+        // an exact face, for the intent geometry can't infer. Use sparingly —
+        // the cone is right most of the time. A face pinned AWAY from the other
+        // block forces the curve to loop around to reach it, so re-check the
+        // edge afterwards. A typo warns in the console and is ignored.
+        // Ignored on sequence tabs (they have their own renderer).
         //
         // when no bendDir is set, the curve auto-routes around whatever sits
         // between the endpoints — it grows, flips, AND skews its bow (slides
@@ -280,7 +293,7 @@ The skeleton handles geometry; you handle meaning. Two things are yours to get r
 
 Pick the diagram `type` from what's being described: `system` for services and data stores, `sequence` for time-ordered messages between actors, `flow` for decision/process flows, `er` for a database schema / entity-relationship diagram (tables with columns and Crow's Foot relationships). If the request is ambiguous — missing components, unclear flow direction, unclear sync vs async — ask before inventing components.
 
-For `er` tabs, notation is Crow's Foot (IE) — the de facto standard. Data is hand-authored only (no DBML/SQL/Mermaid importer, no liz-whiteboard integration): write the `columns` and relationship fields directly from the user's description, the same way you'd author any other tab. Express a many-to-many relationship as a junction table plus two one-to-many relationships, never a single M:N edge. A composite foreign key is one relationship per column pair (no bracketed-group notation). Manual routing overrides (`bendDir`) don't apply to ER edges — the orthogonal router has no escape hatch, so re-check the rendered diagram after authoring and rearrange tables (drag, or edit starting `x`/`y`) if a relationship routes awkwardly.
+For `er` tabs, notation is Crow's Foot (IE) — the de facto standard. Data is hand-authored only (no DBML/SQL/Mermaid importer, no liz-whiteboard integration): write the `columns` and relationship fields directly from the user's description, the same way you'd author any other tab. Express a many-to-many relationship as a junction table plus two one-to-many relationships, never a single M:N edge. A composite foreign key is one relationship per column pair (no bracketed-group notation). `bendDir` doesn't apply to ER edges — the orthogonal router ignores it. `fromSide`/`toSide` apply only partially: on an end that names a column the row is a horizontal band, so only `"left"`/`"right"` can be honoured (`"top"`/`"bottom"` is contradictory and ignored); an end with no column behaves like any other tab. So for ER, re-check the rendered diagram after authoring and rearrange tables (drag, or edit starting `x`/`y`) if a relationship routes awkwardly.
 
 For `sequence` tabs, mark `activate`/`deactivate` on messages where an actor is doing active work — the renderer draws a UML-style activation bar on that actor's lifeline spanning the marked rows.
 
