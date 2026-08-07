@@ -19,6 +19,7 @@ const TARGETS = [
   { file: "examples/pulsepay-architecture.html", template: "assets/skeleton.html", marker: "const app = {",
     title: "PulsePay Architecture — Interactive Diagram" }, // upgrade its generic title
   { file: "samples/ai-agent-platform.html", template: "assets/skeleton.html", marker: "const app = {" },
+  { file: "samples/er-diagram.html", template: "assets/skeleton.html", marker: "const app = {" },
   { file: "examples/ai-agent-platform-poster.html", template: "assets/platform-skeleton.html", marker: "const config = {" },
   { file: "examples/pulsepay-platform-poster.html", template: "assets/platform-skeleton.html", marker: "const config = {" },
   { file: "samples/platform-architecture.html", template: "assets/platform-skeleton.html", marker: "const config = {" },

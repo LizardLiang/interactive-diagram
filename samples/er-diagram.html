@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Bump this on every feature ship (see SKILL.md "Maintaining the shipped examples"). -->
     <meta name="generator" content="interactive-diagram v1.16.0" />
-    <title>Interactive Diagram — Skeleton</title>
+    <title>E-Commerce ER Diagram — Interactive Diagram</title>
     <!--
       ============================================================================
       INTERACTIVE-DIAGRAM SKELETON  (tab / container / block framework)
@@ -387,124 +387,93 @@
       // wording HERE, not by editing TYPE_LABELS below: only the config object
       // survives scripts/upgrade-diagram.mjs re-hosting.
       const app = {
-        title: "圖表",
+        title: "電商資料庫 ER 圖",
         tabs: [
+          // Two "er" tabs on purpose: this file is also the marker-id
+          // namespacing regression check (implementation-notes.md:131-145) —
+          // every tab's Crow's Foot markers must render, not just the first.
           {
-            id: "system",
-            label: "System",
-            type: "system",
-
-            containers: [
-              { id: "client",  label: "Client tier",  orient: "band", color: "#3b82f6", title: { side: "above" } },
-              { id: "backend", label: "Backend tier", orient: "band", color: "#15803d", title: { side: "above" } },
-              { id: "data",    label: "Data tier",    orient: "band", color: "#1f2937", title: { side: "above" } },
-            ],
+            id: "sales",
+            label: "Sales Schema",
+            type: "er",
 
             blocks: [
-              { id: "browser", container: "client", type: "client", x: 120, y: 120, w: 220, h: 90,
-                label: "Browser\n(SPA)",
-                description: "The user-facing single-page app. Talks to the API over HTTPS and streams updates over SSE.",
-                tech: ["React", "EventSource"],
-                responsibilities: ["Render UI", "POST user actions", "Subscribe to SSE stream"] },
-              { id: "api", container: "backend", type: "http", x: 120, y: 360, w: 220, h: 90,
-                // long single-line label → auto-wraps, block grows (no \n needed)
-                label: "API gateway and request validation service",
-                description: "Thin HTTP layer. Validates requests, enqueues work, returns 202 immediately.",
-                tech: ["ASP.NET Core"],
-                responsibilities: ["Auth + validation", "Enqueue work", "Stream SSE back"] },
-              { id: "worker", container: "backend", type: "worker", x: 420, y: 360, w: 220, h: 90,
-                // authored \n stays a hard break — wrapping never removes it
-                label: "Worker\n(BackgroundService)",
-                description: "Drains the queue and runs the long-lived job, writing results to the store.",
-                tech: ["IHostedService"],
-                responsibilities: ["Dequeue jobs", "Run async loop", "Persist results"] },
-              { id: "db", container: "data", type: "db", x: 420, y: 600, w: 220, h: 90,
-                // long CJK label → character-wraps (no spaces to break on)
-                label: "交易資料庫（事件日誌與關聯式資料表）",
-                description: "Append-only event log + relational tables.",
-                tech: ["PostgreSQL"],
-                responsibilities: ["Persist state", "Serve reads"] },
+              // x/y are STARTING HINTS, same as every other tab type —
+              // layout.run() settles the final positions; fitTableBlock
+              // derives w/h from the column list, not these hints.
+              { id: "customers", x: 100, y: 120,
+                label: "customers",
+                description: "One row per registered shopper.",
+                columns: [
+                  { name: "id",    type: "INT",          pk: true },
+                  { name: "name",  type: "VARCHAR(120)" },
+                  { name: "email", type: "VARCHAR(160)", unique: true },
+                ] },
+              { id: "orders", x: 420, y: 120,
+                label: "orders",
+                description: "One row per placed order; belongs to exactly one customer.",
+                columns: [
+                  { name: "id",          type: "INT",         pk: true },
+                  { name: "customer_id", type: "INT",         fk: true },
+                  { name: "order_date",  type: "DATE" },
+                  { name: "status",      type: "VARCHAR(20)" },
+                ] },
+              { id: "order_items", x: 740, y: 120,
+                label: "order_items",
+                description: "Line items of an order — a weak entity: (id, order_id) is the composite key.",
+                columns: [
+                  { name: "id",         type: "INT",           pk: true },
+                  { name: "order_id",   type: "INT",           pk: true, fk: true },
+                  { name: "product_id", type: "INT" },
+                  { name: "quantity",   type: "INT" },
+                  { name: "unit_price", type: "DECIMAL(10,2)" },
+                ] },
             ],
 
             edges: [
-              { from: "browser", to: "api",    label: "POST /action", style: "sync" },
-              { from: "api",     to: "browser", label: "202 Accepted", style: "dashed", bendDir: -1 },
-              { from: "api",     to: "worker", label: "enqueue",      style: "async" },
-              { from: "worker",  to: "db",     label: "write result", style: "sync" },
-              { from: "db",      to: "worker", label: "load history", style: "dashed", bendDir: -1 },
+              // customer (one) --- (zero-or-many) orders — non-identifying (dashed)
+              { from: "customers", to: "orders", fromColumn: "id", toColumn: "customer_id",
+                fromCardinality: "one", toCardinality: "zero-or-many", identifying: false },
+              // order (one) --- (one-or-many) order_items — order_id is part of
+              // order_items' own PK, so this relationship is IDENTIFYING (solid).
+              { from: "orders", to: "order_items", fromColumn: "id", toColumn: "order_id",
+                fromCardinality: "one", toCardinality: "one-or-many", identifying: true },
             ],
           },
 
           {
-            id: "deploy",
-            label: "Deployment",
-            type: "system",
-
-            containers: [
-              { id: "edge",  label: "Edge",          orient: "band", color: "#3b82f6", title: { side: "above" } },
-              { id: "infra", label: "Infrastructure", orient: "band", color: "#374151", title: { side: "above" } },
-            ],
+            id: "catalog",
+            label: "Catalog Schema",
+            type: "er",
 
             blocks: [
-              { id: "cdn", container: "edge", type: "client", x: 160, y: 120, w: 220, h: 90,
-                label: "CDN / Edge",
-                description: "Terminates TLS and serves static assets close to the user.",
-                tech: ["CloudFront"],
-                responsibilities: ["Cache static assets", "TLS termination"] },
-              { id: "app", container: "infra", type: "worker", x: 160, y: 360, w: 220, h: 90,
-                label: "App container",
-                description: "Runs the API + worker image behind an internal load balancer.",
-                tech: ["ECS Fargate"],
-                responsibilities: ["Serve API", "Run background jobs"] },
-              { id: "store", container: "infra", type: "db", x: 540, y: 360, w: 220, h: 90,
-                label: "Managed store",
-                description: "Managed Postgres with automated backups.",
-                tech: ["RDS"],
-                responsibilities: ["Persist state", "Point-in-time recovery"] },
+              { id: "categories", x: 100, y: 120,
+                label: "categories",
+                description: "Product categories; a category may optionally nest under a parent category.",
+                columns: [
+                  { name: "id",        type: "INT",         pk: true },
+                  { name: "parent_id", type: "INT",         fk: true },
+                  { name: "name",      type: "VARCHAR(80)" },
+                ] },
+              { id: "products", x: 460, y: 120,
+                label: "products",
+                description: "One row per sellable product; belongs to exactly one category.",
+                columns: [
+                  { name: "id",          type: "INT",           pk: true },
+                  { name: "category_id", type: "INT",           fk: true },
+                  { name: "name",        type: "VARCHAR(120)" },
+                  { name: "price",       type: "DECIMAL(10,2)" },
+                ] },
             ],
 
             edges: [
-              { from: "cdn", to: "app",   label: "origin fetch", style: "sync" },
-              { from: "app", to: "store", label: "read / write", style: "sync" },
-            ],
-          },
-
-          // A SEQUENCE (lifeline) tab. Instead of containers/blocks/edges it
-          // carries `actors` (vertical lifelines, left→right in array order) and
-          // `messages` (ordered events, top→bottom). A message is a cross arrow
-          // when from!==to, or a self-loop when from===to. `style` drives the
-          // stroke/marker; `type` on an actor drives its color from TYPE.
-          // A message may also carry `activate: true` (opens an activation bar
-          // on the receiver, `to`) and/or `deactivate: true` (closes the bar on
-          // the sender, `from`). Flags are explicit — no auto-inference.
-          // Re-entrant activations on the same actor merge into one continuous
-          // bar; an activation left open at the end runs to the bottom actor box.
-          {
-            id: "seq-demo",
-            label: "Sequence",
-            type: "sequence",
-            actors: [                          // order = left→right; middle actor is the pivot
-              { id: "a", label: "Actor A", type: "client" },
-              { id: "b", label: "Actor B", type: "worker" },
-              { id: "c", label: "Actor C", type: "db" },
-            ],
-            messages: [
-              { from: "a", to: "b", style: "sync",     label: "① Request to B",
-                description: "Dummy step 1.", tech: ["dummy"], responsibilities: ["dummy"],
-                activate: true },
-              { from: "b", to: "b", style: "internal", label: "② B internal work",
-                description: "Dummy self-step on B.", tech: ["dummy"], responsibilities: ["dummy"] },
-              { from: "b", to: "b", style: "internal", label: "③ B second internal step",
-                description: "Dummy self-step.", tech: ["dummy"], responsibilities: ["dummy"] },
-              { from: "b", to: "a", style: "stream",   label: "④ Result back to A",
-                description: "Dummy result to A.", tech: ["dummy"], responsibilities: ["dummy"],
-                deactivate: true },
-              { from: "a", to: "a", style: "internal", label: "⑤ A reviews internally",
-                description: "Dummy self-step on A.", tech: ["dummy"], responsibilities: ["dummy"] },
-              { from: "a", to: "b", style: "sync",     label: "⑥ A confirms to B",
-                description: "Dummy confirm.", tech: ["dummy"], responsibilities: ["dummy"] },
-              { from: "a", to: "c", style: "sync",     label: "⑦ A acts on C directly",
-                description: "Dummy direct action on C — skips B.", tech: ["dummy"], responsibilities: ["dummy"] },
+              // category (one) --- (zero-or-many) products — non-identifying
+              { from: "categories", to: "products", fromColumn: "id", toColumn: "category_id",
+                fromCardinality: "one", toCardinality: "zero-or-many", identifying: false },
+              // self-referencing: a category has zero-or-one parent, and
+              // zero-or-many children — renders as a loop-back on "categories".
+              { from: "categories", to: "categories", fromColumn: "id", toColumn: "parent_id",
+                fromCardinality: "zero-or-one", toCardinality: "zero-or-many", identifying: false },
             ],
           },
         ],

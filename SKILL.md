@@ -136,7 +136,10 @@ Two entry points (on each tab's `layout`):
   region), which also exempts the crossing band's blocks and title against that
   lane (see `POLICY.isConflict`). A block inside its *own* container and a title
   captioning its *own* container are by design. Blocks that spill *outside*
-  their declared container are reported separately as `spill`.
+  their declared container are reported separately as `spill`. The audit also
+  samples every routed edge (curved or, on `er` tabs, orthogonal) against every
+  block that isn't one of its own two endpoints, reporting a crossing as
+  `edge-through-block` — this applies to every tab type, not just `er`.
 
 `layout.resolveLabels()` runs on the DOM after render (labels need measured
 positions); everything else runs on the in-memory tab data. Geometry primitives
@@ -159,7 +162,7 @@ const app = {
     {
       id: "system",                       // unique; used as cache key + svg/png filename
       label: "System",                    // caption shown in the tab strip
-      type: "system" | "sequence" | "flow",
+      type: "system" | "sequence" | "flow" | "er",
 
       containers: [                        // OPTIONAL — the zone rectangles
         { id, label, orient, color, title },
@@ -217,6 +220,31 @@ const app = {
         // flags are explicit (no auto-inference); re-entrant activations on the
         // same actor merge into one bar; an unclosed bar runs to the bottom box
       ],
+
+      // For type: "er" tabs, blocks are TABLE nodes and edges are RELATIONSHIPS
+      // (still declared under `blocks`/`edges` above — `containers` still works
+      // as schema/module grouping — only the shape of each entry differs):
+      //   blocks[].columns — [{ name, type, pk, fk, unique }], one row per
+      //                      column (name + type + PK/FK/UK badges). Omit or
+      //                      leave empty for a header-only box. `x`/`y` are
+      //                      still required starting hints, same as any block
+      //                      — only `w`/`h` are derived from the column list.
+      //   edges[] — { from, to, fromColumn, toColumn, fromCardinality,
+      //               toCardinality, identifying }. `from`/`to` are still
+      //               TABLE ids, exactly as on every other tab type;
+      //               fromColumn/toColumn name the exact column each end
+      //               anchors to (unresolvable table/column names log a
+      //               console.warn and that relationship is skipped, the
+      //               rest of the diagram still renders). fromCardinality/
+      //               toCardinality are each one of "one" | "zero-or-one" |
+      //               "one-or-many" | "zero-or-many", drawn as a Crow's Foot
+      //               (IE) marker at that end. identifying: false renders the
+      //               line dashed (default true = solid). from === to renders
+      //               a self-referencing loop-back. Relationships route
+      //               orthogonally (their own router, independent of the
+      //               curved system/flow router) and skip the label-corridor
+      //               pass; hovering a table highlights direct neighbours
+      //               only, not the full connected chain.
     },
     // …add more tabs for additional views; the tab strip appears automatically
   ],
@@ -230,7 +258,7 @@ hidden and the file behaves like a plain single diagram.
 
 The renderer, theme, and every interaction below ship in the skeleton — you don't build them. Your job is to author config so each one carries meaning (real chains to highlight, real descriptions in the panel, sensible node types for color). The behaviors, for reference:
 
-- **Hover** a node → highlights its whole connected **chain** (everything upstream that reaches it plus everything downstream it reaches), dimming the rest. `chain()` computes it, `highlight()` applies it.
+- **Hover** a node → highlights its whole connected **chain** (everything upstream that reaches it plus everything downstream it reaches), dimming the rest. `chain()` computes it, `highlight()` applies it. On `er` tabs this is direct relationship partners only, not full chain reachability — a normalised schema hovered with full-chain highlighting would light up nearly every table.
 - **Double-click** → pins that chain so it persists; double-click again (or click another node) to clear. Hover still previews while pinned (`state.pinned`).
 - **Click** → a side panel slides in with the node's label, type, description, tech, and responsibilities.
 - **Pan** by dragging empty canvas; **zoom** by wheel/pinch with `+`, `−`, and **Fit to screen** in the toolbar.
@@ -250,7 +278,9 @@ The skeleton handles geometry; you handle meaning. Two things are yours to get r
 - **Container membership and starting hints.** A container is a **zone** — an area grouping the blocks of one layer / system / module — and it is **optional**: blocks without a `container` (or a tab with no `containers` at all) pack as free units alongside the zones. `x/y/w/h` are *hints*, not final coordinates — `layout.run()` settles blocks inside their zone, packs zones from the top-left corner so nothing overlaps, and grows containers around their members. Group blocks the way the system actually decomposes (by tier, lane, or stage) so the auto-layout has a sensible starting shape to refine.
 - **Node `type` and content.** `type` drives color, so pick the one that reflects each node's role (client / http / worker / infra / queue / db / external). Fill `description`, `tech`, and `responsibilities` — an empty panel is a dead click.
 
-Pick the diagram `type` from what's being described: `system` for services and data stores, `sequence` for time-ordered messages between actors, `flow` for decision/process flows. If the request is ambiguous — missing components, unclear flow direction, unclear sync vs async — ask before inventing components.
+Pick the diagram `type` from what's being described: `system` for services and data stores, `sequence` for time-ordered messages between actors, `flow` for decision/process flows, `er` for a database schema / entity-relationship diagram (tables with columns and Crow's Foot relationships). If the request is ambiguous — missing components, unclear flow direction, unclear sync vs async — ask before inventing components.
+
+For `er` tabs, notation is Crow's Foot (IE) — the de facto standard. Data is hand-authored only (no DBML/SQL/Mermaid importer, no liz-whiteboard integration): write the `columns` and relationship fields directly from the user's description, the same way you'd author any other tab. Express a many-to-many relationship as a junction table plus two one-to-many relationships, never a single M:N edge. A composite foreign key is one relationship per column pair (no bracketed-group notation). Manual routing overrides (`bendDir`) don't apply to ER edges — the orthogonal router has no escape hatch, so re-check the rendered diagram after authoring and rearrange tables (drag, or edit starting `x`/`y`) if a relationship routes awkwardly.
 
 For `sequence` tabs, mark `activate`/`deactivate` on messages where an actor is doing active work — the renderer draws a UML-style activation bar on that actor's lifeline spanning the marked rows.
 
@@ -263,6 +293,7 @@ The layout guard does the overlap work; your job is to confirm it succeeded and 
 - Long labels wrap without clipping, and the layout audit still passes after blocks grow.
 - Dark mode, Fit to screen, custom line/label colors, and both exports work.
 - Verify PNG in original, 16:9, and 4:3 modes; connectors, labels, lifelines, and the theme background must remain visible in the downloaded files.
+- For `er` tabs specifically: relationship lines terminate at the correct column rows (not block edges), both cardinality markers render at each end, non-identifying relationships are visibly dashed, and a self-referencing relationship loops back without crossing its own table.
 
 If the audit can't clear a stubborn tab on its own, the **⚑ Audit overlap** → auto-fix button restores the tidy built layout; reach for it before hand-tuning coordinates.
 
